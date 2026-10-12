@@ -1,6 +1,16 @@
 extends Control
 
 const GlbIO = preload("res://scripts/glb_io.gd")
+const MeshEdit = preload("res://scripts/mesh_edit.gd")
+var mesh_mode := "Object"
+var picked_surface := -1
+var picked_face := -1
+var picked_vertex := Vector3.ZERO
+var has_picked_vertex := false
+var mesh_tools_container: ScrollContainer
+var mesh_visual: MeshInstance3D
+var mesh_highlight_material: StandardMaterial3D
+
 const PROJECT_GLB := "user://dabsky-project.glb"
 var import_dialog: FileDialog
 var export_dialog: FileDialog
@@ -84,6 +94,7 @@ func _ready() -> void:
 	_add_button(shapes, "Export GLB", _open_export_dialog)
 	_add_button(shapes, "Material", _toggle_material_panel)
 	_add_button(shapes, "Precise", _toggle_transform_panel)
+	_add_button(shapes, "Edit Mesh", _toggle_mesh_mode)
 	_build_material_panel(layout)
 	_build_transform_panel(layout)
 	_build_glb_dialogs()
@@ -139,6 +150,19 @@ func _ready() -> void:
 	_add_button(editbar, "Reset View", _reset_view)
 	_add_button(editbar, "Fit -", func(): _adjust_screen_fit(-SCREEN_FIT_STEP))
 	_add_button(editbar, "Fit +", func(): _adjust_screen_fit(SCREEN_FIT_STEP))
+	var meshbar := HBoxContainer.new()
+	_add_scrolling_toolbar(layout, meshbar)
+	mesh_tools_container = meshbar.get_parent() as ScrollContainer
+	mesh_tools_container.visible = false
+	_add_button(meshbar, "Face Select", _set_mesh_mode.bind("Face"))
+	_add_button(meshbar, "Vertex Select", _set_mesh_mode.bind("Vertex"))
+	_add_button(meshbar, "Exit Edit", _set_mesh_mode.bind("Object"))
+	_add_button(meshbar, "Extrude +", _extrude_picked_face.bind(0.35))
+	_add_button(meshbar, "Extrude -", _extrude_picked_face.bind(-0.35))
+	_add_button(meshbar, "Inset", _inset_picked_face)
+	for axis in ["X", "Y", "Z"]:
+		_add_button(meshbar, "V " + axis + "-", _nudge_picked_vertex.bind(axis, -1))
+		_add_button(meshbar, "V " + axis + "+", _nudge_picked_vertex.bind(axis, 1))
 	var command_row := HBoxContainer.new()
 	layout.add_child(command_row)
 	command_input = LineEdit.new()
@@ -155,6 +179,10 @@ func _ready() -> void:
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.max_lines_visible = 2
 	layout.add_child(status)
+	mesh_highlight_material = StandardMaterial3D.new()
+	mesh_highlight_material.albedo_color = Color(1.0, 0.66, 0.18)
+	mesh_highlight_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mesh_highlight_material.no_depth_test = true
 	highlight_material = StandardMaterial3D.new()
 	highlight_material.albedo_color = Color(0.64, 0.3, 1.0, 0.20)
 	highlight_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -456,6 +484,7 @@ func _add_primitive(kind: String, track_undo: bool = true) -> void:
 	status.text = "%s created. Tap an axis or drag to orbit." % kind
 
 func _select_object(obj: MeshInstance3D) -> void:
+	_clear_mesh_selection()
 	if selected != null and is_instance_valid(selected):
 		selected.material_overlay = null
 	selected = obj
@@ -883,6 +912,9 @@ func _input(event: InputEvent) -> void:
 			_update_camera()
 
 func _pick_object(screen_position: Vector2) -> void:
+	if mesh_mode != "Object":
+		_pick_mesh_component(screen_position)
+		return
 	var rect := viewport_container.get_global_rect()
 	if rect.size.x < 1.0 or rect.size.y < 1.0 or not rect.has_point(screen_position):
 		return
@@ -905,6 +937,148 @@ func _pick_object(screen_position: Vector2) -> void:
 		_cancel()
 		_select_object(target)
 		status.text = "Selected %s." % target.name
+
+func _clear_mesh_selection() -> void:
+	picked_face = -1
+	picked_surface = -1
+	has_picked_vertex = false
+	if mesh_visual != null and is_instance_valid(mesh_visual):
+		mesh_visual.queue_free()
+	mesh_visual = null
+
+func _toggle_mesh_mode() -> void:
+	if mesh_mode == "Object":
+		_set_mesh_mode("Face")
+	else:
+		_set_mesh_mode("Object")
+
+func _set_mesh_mode(mode: String) -> void:
+	if mode not in ["Object", "Face", "Vertex"]:
+		return
+	if mode != "Object" and selected == null:
+		status.text = "Select a mesh to edit first."
+		return
+	mesh_mode = mode
+	_clear_mesh_selection()
+	mesh_tools_container.visible = mesh_mode != "Object"
+	if mode == "Object":
+		status.text = "Object mode. Tap meshes to select, drag to orbit."
+	elif mode == "Face":
+		status.text = "Face mode: tap a triangle to select it, then Extrude or Inset."
+	else:
+		status.text = "Vertex mode: tap a corner, then use V X/Y/Z + or -."
+
+func _pick_mesh_component(screen_position: Vector2) -> void:
+	if selected == null or selected.mesh == null:
+		return
+	var rect := viewport_container.get_global_rect()
+	if not rect.has_point(screen_position) or rect.size.x < 1.0 or rect.size.y < 1.0:
+		return
+	var viewport_position := (screen_position - rect.position) * Vector2(viewport.size) / rect.size
+	var ray_origin := camera.project_ray_origin(viewport_position)
+	var ray_direction := camera.project_ray_normal(viewport_position)
+	var inverse := selected.global_transform.affine_inverse()
+	var ray_start := inverse * ray_origin
+	var ray_dir := (inverse.basis * ray_direction).normalized()
+	var result: Dictionary = MeshEdit.ray_pick_face(selected.mesh, ray_start, ray_dir)
+	var best_surface: int = int(result.get("surface", -1))
+	var best_face: int = int(result.get("face", -1))
+	var best_point: Vector3 = result.get("point", Vector3.ZERO)
+	if best_face < 0:
+		status.text = "Tap directly on the selected mesh."
+		return
+	picked_surface = best_surface
+	picked_face = best_face
+	has_picked_vertex = false
+	if mesh_mode == "Vertex":
+		var points: PackedVector3Array = MeshEdit.face_vertices(selected.mesh, best_surface, best_face)
+		var best_distance := INF
+		for vertex in points:
+			var dist := vertex.distance_squared_to(best_point)
+			if dist < best_distance:
+				best_distance = dist
+				picked_vertex = vertex
+		has_picked_vertex = true
+		status.text = "Vertex selected. Use V X/Y/Z +/- to edit."
+	else:
+		status.text = "Triangle %d selected. Extrude or Inset." % (picked_face + 1)
+	_refresh_mesh_visual()
+
+func _refresh_mesh_visual() -> void:
+	if mesh_visual != null and is_instance_valid(mesh_visual):
+		mesh_visual.queue_free()
+	mesh_visual = null
+	if selected == null or picked_face < 0 or picked_surface < 0:
+		return
+	var points: PackedVector3Array = MeshEdit.face_vertices(selected.mesh, picked_surface, picked_face)
+	if points.size() != 3:
+		return
+	mesh_visual = MeshInstance3D.new()
+	if mesh_mode == "Vertex" and has_picked_vertex:
+		var marker := SphereMesh.new()
+		marker.radius = 0.10
+		marker.height = 0.20
+		mesh_visual.mesh = marker
+		mesh_visual.position = picked_vertex
+		mesh_visual.material_override = mesh_highlight_material
+	else:
+		var wire := ImmediateMesh.new()
+		wire.surface_begin(Mesh.PRIMITIVE_LINES, mesh_highlight_material)
+		for index in range(3):
+			wire.surface_add_vertex(points[index])
+			wire.surface_add_vertex(points[(index + 1) % 3])
+		wire.surface_end()
+		mesh_visual.mesh = wire
+	selected.add_child(mesh_visual)
+
+func _extrude_picked_face(distance: float) -> void:
+	if mesh_mode != "Face" or selected == null or picked_face < 0:
+		status.text = "Select a triangle in Face mode first."
+		return
+	var new_mesh: ArrayMesh = MeshEdit.extrude_face(selected.mesh, picked_surface, picked_face, distance)
+	if new_mesh == null:
+		status.text = "Cannot extrude this mesh face (static triangles only)."
+		return
+	_cancel()
+	_record_change()
+	selected.mesh = new_mesh
+	_refresh_mesh_visual()
+	status.text = "Face extruded %0.2f units. Undo is available." % distance
+
+func _inset_picked_face() -> void:
+	if mesh_mode != "Face" or selected == null or picked_face < 0:
+		status.text = "Select a triangle in Face mode first."
+		return
+	var new_mesh: ArrayMesh = MeshEdit.inset_face(selected.mesh, picked_surface, picked_face)
+	if new_mesh == null:
+		status.text = "Cannot inset this mesh face."
+		return
+	_cancel()
+	_record_change()
+	selected.mesh = new_mesh
+	_refresh_mesh_visual()
+	status.text = "Face inset by 20%. Undo is available."
+
+func _nudge_picked_vertex(axis: String, direction: int) -> void:
+	if mesh_mode != "Vertex" or selected == null or not has_picked_vertex:
+		status.text = "Tap a vertex in Vertex mode first."
+		return
+	var delta := Vector3.ZERO
+	match axis:
+		"X": delta.x = 0.15 * direction
+		"Y": delta.y = 0.15 * direction
+		"Z": delta.z = 0.15 * direction
+		_: return
+	var new_mesh: ArrayMesh = MeshEdit.move_vertex(selected.mesh, picked_vertex, delta)
+	if new_mesh == null:
+		status.text = "Cannot modify this vertex."
+		return
+	_cancel()
+	_record_change()
+	selected.mesh = new_mesh
+	picked_vertex += delta
+	_refresh_mesh_visual()
+	status.text = "Vertex moved along %s. Undo is available." % axis
 
 func _build_menu() -> void:
 	menu_layer = Control.new()
