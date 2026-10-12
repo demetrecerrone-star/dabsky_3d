@@ -81,6 +81,12 @@ jobs:
           fi
       - name: Validate Godot project
         run: godot --headless --verbose --path . --editor --quit
+      - name: Smoke-test safe-area layout and startup
+        run: |
+          godot --headless --path . --quit-after 20 2>&1 | tee godot-smoke.log
+          if grep -E "SCRIPT ERROR|Parse Error|Invalid call|Failed to load script" godot-smoke.log; then
+            exit 1
+          fi
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}
