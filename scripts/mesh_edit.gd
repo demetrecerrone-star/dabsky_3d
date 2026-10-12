@@ -6,10 +6,15 @@ extends RefCounted
 const MAX_TRIANGLES := 20000
 const EPSILON := 0.00001
 
+static func _primitive_type(mesh: Mesh, surface: int) -> int:
+	if mesh is ArrayMesh:
+		return (mesh as ArrayMesh).surface_get_primitive_type(surface)
+	return Mesh.PRIMITIVE_TRIANGLES
+
 static func _surface_data(mesh: Mesh, surface: int) -> Dictionary:
 	if mesh == null or surface < 0 or surface >= mesh.get_surface_count():
 		return {}
-	if mesh.surface_get_primitive_type(surface) != Mesh.PRIMITIVE_TRIANGLES:
+	if _primitive_type(mesh, surface) != Mesh.PRIMITIVE_TRIANGLES:
 		return {}
 	var arrays: Array = mesh.surface_get_arrays(surface)
 	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
@@ -72,7 +77,7 @@ static func _assemble(mesh: Mesh, changed_surface: int, data: Dictionary) -> Arr
 			arrays[Mesh.ARRAY_COLOR] = colors
 			output.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		else:
-			output.add_surface_from_arrays(mesh.surface_get_primitive_type(surface), mesh.surface_get_arrays(surface))
+			output.add_surface_from_arrays(_primitive_type(mesh, surface), mesh.surface_get_arrays(surface))
 		var material := mesh.surface_get_material(surface)
 		if material != null:
 			output.surface_set_material(surface, material)
@@ -86,7 +91,7 @@ static func move_vertex(mesh: Mesh, vertex: Vector3, delta: Vector3) -> ArrayMes
 	for surface in range(mesh.get_surface_count()):
 		var data := _surface_data(mesh, surface)
 		if data.is_empty():
-			output.add_surface_from_arrays(mesh.surface_get_primitive_type(surface), mesh.surface_get_arrays(surface))
+			output.add_surface_from_arrays(_primitive_type(mesh, surface), mesh.surface_get_arrays(surface))
 		else:
 			var positions: PackedVector3Array = data["positions"]
 			var modified := false
@@ -100,7 +105,7 @@ static func move_vertex(mesh: Mesh, vertex: Vector3, delta: Vector3) -> ArrayMes
 				var partial := _assemble(mesh, surface, data)
 				output.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, partial.surface_get_arrays(surface))
 			else:
-				output.add_surface_from_arrays(mesh.surface_get_primitive_type(surface), mesh.surface_get_arrays(surface))
+				output.add_surface_from_arrays(_primitive_type(mesh, surface), mesh.surface_get_arrays(surface))
 		var material := mesh.surface_get_material(surface)
 		if material != null:
 			output.surface_set_material(surface, material)
