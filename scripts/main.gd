@@ -7,7 +7,20 @@ var command_input: LineEdit
 var status: Label
 var previous_transform: Transform3D
 var preview_active := false
-var undo_stack: Array[Transform3D] = []
+var undo_stack: Array[Dictionary] = []
+var redo_stack: Array[Dictionary] = []
+var objects: Array[MeshInstance3D] = []
+var object_list: ItemList
+var object_panel: VBoxContainer
+var object_name_input: LineEdit
+var selected_label: Label
+var transform_mode := "Move"
+var preview_snapshot: Dictionary = {}
+var editing_tap := Vector2.ZERO
+var pointer_moved := false
+var highlight_material: StandardMaterial3D
+const PROJECT_FILE := "user://dabsky-project.json"
+const OBJECT_LIMIT := 100
 var orbit_yaw := 0.55
 var orbit_pitch := 0.35
 var orbit_distance := 8.0
@@ -39,15 +52,44 @@ func _ready() -> void:
 	var layout := VBoxContainer.new()
 	layout.add_theme_constant_override("separation", 6)
 	workspace_layer.add_child(layout)
-	var toolbar := HFlowContainer.new()
-	toolbar.add_theme_constant_override("h_separation", 7)
-	toolbar.add_theme_constant_override("v_separation", 5)
-	layout.add_child(toolbar)
-	_add_button(toolbar, "Add Cube", _add_cube)
-	_add_button(toolbar, "Undo", _undo)
-	_add_button(toolbar, "Reset View", _reset_view)
-	_add_button(toolbar, "Fit -", func(): _adjust_screen_fit(-SCREEN_FIT_STEP))
-	_add_button(toolbar, "Fit +", func(): _adjust_screen_fit(SCREEN_FIT_STEP))
+	var titlebar := HBoxContainer.new()
+	layout.add_child(titlebar)
+	selected_label = Label.new()
+	selected_label.text = "Dabsky 3D • No object"
+	selected_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	selected_label.add_theme_font_size_override("font_size", 17)
+	titlebar.add_child(selected_label)
+	_add_button(titlebar, "Menu", _leave_workspace)
+	var shapes := HBoxContainer.new()
+	_add_scrolling_toolbar(layout, shapes)
+	for kind in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
+		_add_button(shapes, "+ " + kind, _add_primitive.bind(kind))
+	_add_button(shapes, "Objects", _toggle_object_panel)
+	_add_button(shapes, "New", _new_project)
+	_add_button(shapes, "Save", _save_project)
+	_add_button(shapes, "Load", _load_project)
+	object_panel = VBoxContainer.new()
+	object_panel.visible = false
+	layout.add_child(object_panel)
+	var object_row := HBoxContainer.new()
+	object_panel.add_child(object_row)
+	object_list = ItemList.new()
+	object_list.custom_minimum_size = Vector2(240, 100)
+	object_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	object_list.select_mode = ItemList.SELECT_SINGLE
+	object_list.item_selected.connect(_select_list_item)
+	object_row.add_child(object_list)
+	var actions := VBoxContainer.new()
+	object_row.add_child(actions)
+	_add_button(actions, "Duplicate", _duplicate_selected)
+	_add_button(actions, "Delete", _delete_selected)
+	var rename_row := HBoxContainer.new()
+	object_panel.add_child(rename_row)
+	object_name_input = LineEdit.new()
+	object_name_input.placeholder_text = "Object name"
+	object_name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rename_row.add_child(object_name_input)
+	_add_button(rename_row, "Rename", _rename_selected)
 	viewport_container = SubViewportContainer.new()
 	viewport_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	viewport_container.stretch = true
@@ -66,25 +108,39 @@ func _ready() -> void:
 	scene_root.add_child(light)
 	light.rotation_degrees = Vector3(-45, -30, 0)
 	_add_grid()
+	var editbar := HBoxContainer.new()
+	_add_scrolling_toolbar(layout, editbar)
+	for mode in ["Move", "Rotate", "Scale"]:
+		_add_button(editbar, mode, _set_transform_mode.bind(mode))
+	for axis in ["X", "Y", "Z"]:
+		_add_button(editbar, axis + "-", _nudge.bind(axis, -1))
+		_add_button(editbar, axis + "+", _nudge.bind(axis, 1))
+	_add_button(editbar, "Undo", _undo)
+	_add_button(editbar, "Redo", _redo)
+	_add_button(editbar, "Reset View", _reset_view)
+	_add_button(editbar, "Fit -", func(): _adjust_screen_fit(-SCREEN_FIT_STEP))
+	_add_button(editbar, "Fit +", func(): _adjust_screen_fit(SCREEN_FIT_STEP))
+	var command_row := HBoxContainer.new()
+	layout.add_child(command_row)
 	command_input = LineEdit.new()
-	command_input.placeholder_text = "Example: move up 2"
-	command_input.custom_minimum_size.y = 48
+	command_input.placeholder_text = "move up 2 • rotate y 45 • scale 2"
+	command_input.custom_minimum_size.y = 45
 	command_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	layout.add_child(command_input)
-	var controls := HFlowContainer.new()
-	controls.add_theme_constant_override("h_separation", 7)
-	controls.add_theme_constant_override("v_separation", 5)
-	layout.add_child(controls)
-	_add_button(controls, "Preview", _preview)
-	_add_button(controls, "Apply", _apply)
-	_add_button(controls, "Cancel", _cancel)
+	command_row.add_child(command_input)
+	_add_button(command_row, "Preview", _preview)
+	_add_button(command_row, "Apply", _apply)
+	_add_button(command_row, "Cancel", _cancel)
 	status = Label.new()
-	status.text = "Drag to orbit the view. Try: move up 2, rotate y 45, scale 2."
+	status.text = "Tap an object to select. Drag to orbit. Choose Move / Rotate / Scale and tap an axis."
 	status.add_theme_font_size_override("font_size", 16)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.max_lines_visible = 2
 	layout.add_child(status)
-	_add_cube()
+	highlight_material = StandardMaterial3D.new()
+	highlight_material.albedo_color = Color(0.64, 0.3, 1.0, 0.20)
+	highlight_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	highlight_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_add_primitive("Cube", false)
 	get_viewport().size_changed.connect(_refresh_screen_fit)
 	call_deferred("_refresh_screen_fit")
 
@@ -96,17 +152,257 @@ func _add_button(parent: Control, label: String, callback: Callable) -> void:
 	button.pressed.connect(callback)
 	parent.add_child(button)
 
-func _add_cube() -> void:
+func _add_scrolling_toolbar(parent: VBoxContainer, contents: HBoxContainer) -> void:
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size.y = 53
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	parent.add_child(scroll)
+	contents.add_theme_constant_override("separation", 7)
+	scroll.add_child(contents)
+
+func _make_mesh(kind: String) -> Mesh:
+	match kind:
+		"Sphere": return SphereMesh.new()
+		"Cylinder": return CylinderMesh.new()
+		"Plane":
+			var plane := PlaneMesh.new()
+			plane.size = Vector2(2, 2)
+			return plane
+		"Cone":
+			var cone := CylinderMesh.new()
+			cone.top_radius = 0.0
+			return cone
+		_: return BoxMesh.new()
+
+func _add_primitive(kind: String, track_undo: bool = true) -> void:
+	if objects.size() >= OBJECT_LIMIT:
+		status.text = "Scene limit: 100 objects."
+		return
 	_cancel()
-	selected = MeshInstance3D.new()
-	selected.mesh = BoxMesh.new()
-	scene_root.add_child(selected)
-	undo_stack.clear()
-	status.text = "Cube selected. Drag the viewport to orbit."
+	if track_undo:
+		_record_change()
+	var obj := MeshInstance3D.new()
+	obj.mesh = _make_mesh(kind)
+	obj.name = "%s_%d" % [kind, objects.size() + 1]
+	obj.set_meta("kind", kind)
+	var material := StandardMaterial3D.new()
+	var palette := {
+		"Cube": Color(0.55, 0.69, 0.86),
+		"Sphere": Color(0.72, 0.52, 0.95),
+		"Cylinder": Color(0.49, 0.8, 0.78),
+		"Plane": Color(0.76, 0.71, 0.58),
+		"Cone": Color(0.94, 0.67, 0.47)
+	}
+	material.albedo_color = palette.get(kind, Color.WHITE)
+	obj.material_override = material
+	scene_root.add_child(obj)
+	obj.position.x = float(objects.size() % 5) * 1.6 - 1.6 if track_undo else 0.0
+	objects.append(obj)
+	_select_object(obj)
+	status.text = "%s created. Tap an axis or drag to orbit." % kind
+
+func _select_object(obj: MeshInstance3D) -> void:
+	if selected != null and is_instance_valid(selected):
+		selected.material_overlay = null
+	selected = obj
+	if selected != null:
+		selected.material_overlay = highlight_material
+	_refresh_object_list()
+	if object_name_input != null:
+		object_name_input.text = selected.name if selected != null else ""
+	if selected_label != null:
+		selected_label.text = ("Selected: " + selected.name + " • " + transform_mode) if selected != null else "Dabsky 3D • No object"
+
+func _refresh_object_list() -> void:
+	if object_list == null:
+		return
+	object_list.clear()
+	for obj in objects:
+		object_list.add_item("%s  ·  %s" % [obj.name, obj.get_meta("kind", "Cube")])
+		if obj == selected:
+			object_list.select(object_list.item_count - 1)
+
+func _select_list_item(index: int) -> void:
+	if index >= 0 and index < objects.size():
+		_cancel()
+		_select_object(objects[index])
+
+func _toggle_object_panel() -> void:
+	object_panel.visible = not object_panel.visible
+	status.text = "Object list opened." if object_panel.visible else "Object list hidden."
+
+func _rename_selected() -> void:
+	if selected == null:
+		status.text = "Select an object first."
+		return
+	var requested := object_name_input.text.strip_edges()
+	if requested.is_empty():
+		status.text = "Enter an object name first."
+		return
+	_cancel()
+	_record_change()
+	selected.name = requested.substr(0, 48)
+	_select_object(selected)
+	status.text = "Object renamed."
+
+func _duplicate_selected() -> void:
+	if selected == null or objects.size() >= OBJECT_LIMIT:
+		status.text = "Select an object (maximum 100)."
+		return
+	_cancel()
+	_record_change()
+	var source := selected
+	var kind: String = str(source.get_meta("kind", "Cube"))
+	var duplicate := MeshInstance3D.new()
+	duplicate.mesh = _make_mesh(kind)
+	duplicate.material_override = source.material_override
+	duplicate.name = source.name + "_copy"
+	duplicate.set_meta("kind", kind)
+	scene_root.add_child(duplicate)
+	duplicate.transform = source.transform
+	duplicate.position.x += 0.8
+	objects.append(duplicate)
+	_select_object(duplicate)
+	status.text = "Object duplicated."
+
+func _delete_selected() -> void:
+	if selected == null:
+		status.text = "Select an object first."
+		return
+	_cancel()
+	_record_change()
+	var removed := selected
+	objects.erase(removed)
+	removed.queue_free()
+	selected = null
+	_select_object(objects.back() if not objects.is_empty() else null)
+	status.text = "Object deleted. Undo can restore it."
+
+func _set_transform_mode(mode: String) -> void:
+	transform_mode = mode
+	_select_object(selected)
+	status.text = "%s: axis buttons adjust X, Y, or Z." % mode
+
+func _nudge(axis: String, direction: int) -> void:
+	if selected == null:
+		status.text = "Select an object first."
+		return
+	_cancel()
+	var vec := Vector3.ZERO
+	match axis:
+		"X": vec = Vector3.RIGHT
+		"Y": vec = Vector3.UP
+		"Z": vec = Vector3.BACK
+	_record_change()
+	match transform_mode:
+		"Rotate":
+			selected.rotate_object_local(vec, deg_to_rad(15.0 * direction))
+		"Scale":
+			var delta := vec * (0.1 * direction)
+			selected.scale = Vector3(
+				maxf(0.1, selected.scale.x + delta.x),
+				maxf(0.1, selected.scale.y + delta.y),
+				maxf(0.1, selected.scale.z + delta.z)
+			)
+		_:
+			selected.position += vec * (0.25 * direction)
+	status.text = "%s %s %s" % [transform_mode, axis, "+" if direction > 0 else "-"]
+
+func _vec_array(value: Vector3) -> Array:
+	return [value.x, value.y, value.z]
+
+func _read_vec(value: Variant, fallback: Vector3) -> Vector3:
+	if typeof(value) != TYPE_ARRAY or value.size() != 3:
+		return fallback
+	for number in value:
+		if typeof(number) != TYPE_INT and typeof(number) != TYPE_FLOAT:
+			return fallback
+		if not is_finite(float(number)) or absf(float(number)) > 10000.0:
+			return fallback
+	return Vector3(float(value[0]), float(value[1]), float(value[2]))
+
+func _snapshot() -> Dictionary:
+	var entries := []
+	for obj in objects:
+		entries.append({
+			"kind": obj.get_meta("kind", "Cube"),
+			"name": obj.name,
+			"position": _vec_array(obj.position),
+			"rotation": _vec_array(obj.rotation),
+			"scale": _vec_array(obj.scale)
+		})
+	return {"objects": entries, "selected_index": objects.find(selected)}
+
+func _restore(snapshot: Dictionary) -> void:
+	if selected != null and is_instance_valid(selected):
+		selected.material_overlay = null
+	selected = null
+	for obj in objects:
+		obj.queue_free()
+	objects.clear()
+	var entries: Array = snapshot.get("objects", [])
+	for entry in entries:
+		if not entry is Dictionary or objects.size() >= OBJECT_LIMIT:
+			continue
+		var kind: String = str(entry.get("kind", "Cube"))
+		if kind not in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
+			continue
+		_add_primitive(kind, false)
+		var obj := objects.back()
+		obj.name = str(entry.get("name", kind)).substr(0, 48)
+		obj.position = _read_vec(entry.get("position"), Vector3.ZERO)
+		obj.rotation = _read_vec(entry.get("rotation"), Vector3.ZERO)
+		obj.scale = _read_vec(entry.get("scale"), Vector3.ONE)
+		obj.scale = Vector3(maxf(0.1, obj.scale.x), maxf(0.1, obj.scale.y), maxf(0.1, obj.scale.z))
+	var selected_index: int = int(snapshot.get("selected_index", -1))
+	_select_object(objects[selected_index] if selected_index >= 0 and selected_index < objects.size() else null)
+
+func _record_change() -> void:
+	undo_stack.append(_snapshot())
+	if undo_stack.size() > 50:
+		undo_stack.pop_front()
+	redo_stack.clear()
+
+func _redo() -> void:
+	_cancel()
+	if redo_stack.is_empty():
+		status.text = "Nothing to redo."
+		return
+	undo_stack.append(_snapshot())
+	_restore(redo_stack.pop_back())
+	status.text = "Redone."
+
+func _save_project() -> void:
+	_cancel()
+	var file := FileAccess.open(PROJECT_FILE, FileAccess.WRITE)
+	if file == null:
+		status.text = "Cannot save project: %s" % error_string(FileAccess.get_open_error())
+		return
+	file.store_string(JSON.stringify({"format": 1, "scene": _snapshot()}))
+	file.close()
+	status.text = "Project saved on this device."
+
+func _load_project() -> void:
+	_cancel()
+	if not FileAccess.file_exists(PROJECT_FILE):
+		status.text = "No saved project yet. Tap Save first."
+		return
+	var file := FileAccess.open(PROJECT_FILE, FileAccess.READ)
+	if file == null:
+		status.text = "Could not read saved project."
+		return
+	var data = JSON.parse_string(file.get_as_text())
+	if not data is Dictionary or not data.get("scene") is Dictionary:
+		status.text = "Project data is invalid."
+		return
+	_record_change()
+	_restore(data["scene"])
+	status.text = "Project loaded."
 
 func _preview() -> void:
 	if selected == null:
-		status.text = "Add a cube first."
+		status.text = "Select or add an object first."
 		return
 	_cancel()
 	var words := command_input.text.strip_edges().to_lower().split(" ", false)
@@ -125,6 +421,7 @@ func _preview() -> void:
 			"z", "forward": axis = Vector3.FORWARD
 			"down": axis = Vector3.DOWN
 	previous_transform = selected.transform
+	preview_snapshot = _snapshot()
 	var valid := true
 	match words[0]:
 		"move": selected.position += axis * value
@@ -145,12 +442,13 @@ func _preview() -> void:
 
 func _apply() -> void:
 	if preview_active:
-		undo_stack.append(previous_transform)
+		undo_stack.append(preview_snapshot)
+		redo_stack.clear()
 		preview_active = false
 		status.text = "Change applied."
 
 func _cancel() -> void:
-	if preview_active and selected != null:
+	if preview_active and selected != null and is_instance_valid(selected):
 		selected.transform = previous_transform
 	preview_active = false
 
@@ -158,9 +456,12 @@ func _undo() -> void:
 	if preview_active:
 		_cancel()
 		status.text = "Preview canceled."
-	elif selected != null and not undo_stack.is_empty():
-		selected.transform = undo_stack.pop_back()
+	elif not undo_stack.is_empty():
+		redo_stack.append(_snapshot())
+		_restore(undo_stack.pop_back())
 		status.text = "Undone."
+	else:
+		status.text = "Nothing to undo."
 
 func _add_grid() -> void:
 	var grid_material := StandardMaterial3D.new()
@@ -195,16 +496,32 @@ func _input(event: InputEvent) -> void:
 		dragging = false
 		return
 	if event is InputEventScreenTouch:
-		dragging = event.pressed and viewport_container.get_global_rect().has_point(event.position)
+		if event.pressed:
+			dragging = viewport_container.get_global_rect().has_point(event.position)
+			editing_tap = event.position
+			pointer_moved = false
+		else:
+			if dragging and not pointer_moved:
+				_pick_object(event.position)
+			dragging = false
 		last_touch = event.position
 	elif event is InputEventScreenDrag and dragging:
-		orbit_yaw -= event.relative.x * 0.008
-		orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
-		_update_camera()
+		if event.position.distance_to(editing_tap) > 12.0:
+			pointer_moved = true
+		if pointer_moved:
+			orbit_yaw -= event.relative.x * 0.008
+			orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
+			_update_camera()
 	elif event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT:
-			dragging = event.pressed and viewport_container.get_global_rect().has_point(event.position)
-			last_touch = event.position
+			if event.pressed:
+				dragging = viewport_container.get_global_rect().has_point(event.position)
+				editing_tap = event.position
+				pointer_moved = false
+			else:
+				if dragging and not pointer_moved:
+					_pick_object(event.position)
+				dragging = false
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			orbit_distance = maxf(2.0, orbit_distance - 0.7)
 			_update_camera()
@@ -212,9 +529,36 @@ func _input(event: InputEvent) -> void:
 			orbit_distance = minf(25.0, orbit_distance + 0.7)
 			_update_camera()
 	elif event is InputEventMouseMotion and dragging:
-		orbit_yaw -= event.relative.x * 0.008
-		orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
-		_update_camera()
+		if event.position.distance_to(editing_tap) > 12.0:
+			pointer_moved = true
+		if pointer_moved:
+			orbit_yaw -= event.relative.x * 0.008
+			orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
+			_update_camera()
+
+func _pick_object(screen_position: Vector2) -> void:
+	var rect := viewport_container.get_global_rect()
+	if rect.size.x < 1.0 or rect.size.y < 1.0 or not rect.has_point(screen_position):
+		return
+	var viewport_position := (screen_position - rect.position) * Vector2(viewport.size) / rect.size
+	var ray_origin := camera.project_ray_origin(viewport_position)
+	var ray_direction := camera.project_ray_normal(viewport_position)
+	var nearest := INF
+	var target: MeshInstance3D = null
+	for obj in objects:
+		var inverse := obj.global_transform.affine_inverse()
+		var local_from := inverse * ray_origin
+		var local_dir := (inverse.basis * ray_direction).normalized()
+		var hit: Variant = obj.get_aabb().grow(0.10).intersects_ray(local_from, local_dir)
+		if hit is Vector3:
+			var distance := ray_origin.distance_to(obj.global_transform * hit)
+			if distance < nearest:
+				nearest = distance
+				target = obj
+	if target != null:
+		_cancel()
+		_select_object(target)
+		status.text = "Selected %s." % target.name
 
 func _build_menu() -> void:
 	menu_layer = Control.new()
@@ -374,6 +718,19 @@ func _resize_menu_content(available: Vector2) -> void:
 	menu_start.add_theme_font_size_override("font_size", clampi(int(available.x / 28.0), 16, 24))
 	menu_start.custom_minimum_size = Vector2(clampf(available.x * 0.65, 170.0, 320.0), clampf(available.y * 0.13, 44.0, 66.0))
 	menu_box.add_theme_constant_override("separation", clampi(int(available.y * 0.025), 4, 16))
+
+func _leave_workspace() -> void:
+	_cancel()
+	workspace_layer.visible = false
+	menu_layer.visible = true
+	if menu_video != null:
+		menu_video.play()
+
+func _new_project() -> void:
+	_cancel()
+	_record_change()
+	_restore({"objects": [], "selected_index": -1})
+	status.text = "New empty project. Tap + Cube, + Sphere, or another shape."
 
 func _enter_workspace() -> void:
 	if menu_video != null:
