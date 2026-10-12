@@ -42,6 +42,10 @@ jobs:
           export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/java_sdk_path = "$JAVA_HOME"
           EOF
+      - name: Create Android debug signing key
+        run: |
+          mkdir -p "$HOME/.local/share/godot"
+          keytool -genkeypair -v -keystore "$HOME/.local/share/godot/debug.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
       - name: Validate Godot project
         run: godot --headless --path . --editor --quit
       - name: Export debug APK
