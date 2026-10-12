@@ -1,0 +1,29 @@
+name: Android APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot and templates
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip
+          unzip -q Godot_v4.4.1-stable_linux.x86_64.zip
+          sudo mv Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
+          mkdir -p ~/.local/share/godot/export_templates/4.4.1.stable
+          wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz
+          unzip -q Godot_v4.4.1-stable_export_templates.tpz
+          mv templates/* ~/.local/share/godot/export_templates/4.4.1.stable/
+      - name: Validate project
+        run: godot --headless --path . --editor --quit
+      - name: Export APK
+        run: |
+          mkdir -p build
+          godot --headless --path . --export-debug Android build/dabsky-3d-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dabsky-3d-debug-apk
+          path: build/dabsky-3d-debug.apk
