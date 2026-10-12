@@ -5,6 +5,7 @@ on:
     branches: [main]
 permissions:
   contents: read
+  issues: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -59,6 +60,7 @@ jobs:
       - name: Validate Godot project
         run: godot --headless --verbose --path . --editor --quit
       - name: Export debug APK
+        id: export
         run: |
           mkdir -p build
           godot --headless --verbose --path . --export-debug Android build/dabsky-3d-debug.apk
@@ -69,9 +71,24 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging build/dabsky-3d-debug.apk
           sha256sum build/dabsky-3d-debug.apk
       - name: Upload APK
+        id: upload
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: dabsky-3d-debug-apk
           path: build/dabsky-3d-debug.apk
           if-no-files-found: error
+      - name: Report build result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPORT_OUTCOME: ${{ steps.export.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$EXPORT_OUTCOME" = "success" ] && [ "$UPLOAD_OUTCOME" = "success" ]; then
+            MSG="APK build successful: $RUN_URL — download **dabsky-3d-debug-apk** from the run's Artifacts section. Commit: $GITHUB_SHA"
+          else
+            MSG="APK build failed: $RUN_URL — export: $EXPORT_OUTCOME; artifact upload: $UPLOAD_OUTCOME. Commit: $GITHUB_SHA"
+          fi
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "$MSG"
