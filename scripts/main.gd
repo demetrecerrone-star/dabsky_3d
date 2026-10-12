@@ -202,6 +202,8 @@ func _build_menu() -> void:
 		menu_video = VideoStreamPlayer.new()
 		menu_video.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		menu_video.expand = true
+		menu_video.volume_db = -80.0
+		menu_video.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		menu_video.stream = load("res://assets/dabsky-menu-loop.ogv")
 		menu_video.finished.connect(func(): menu_video.play())
 		menu_layer.add_child(menu_video)
@@ -213,10 +215,18 @@ func _build_menu() -> void:
 	menu_layer.add_child(shade)
 	var center := VBoxContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	center.custom_minimum_size = Vector2(380, 220)
-	center.position = Vector2(-190, -110)
+	center.custom_minimum_size = Vector2(380, 374)
+	center.position = Vector2(-190, -187)
 	center.add_theme_constant_override("separation", 22)
 	menu_layer.add_child(center)
+	if ResourceLoader.exists("res://assets/dabsky-icon.png"):
+		var logo := TextureRect.new()
+		logo.texture = load("res://assets/dabsky-icon.png")
+		logo.custom_minimum_size = Vector2(154, 154)
+		logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		center.add_child(logo)
 	var heading := Label.new()
 	heading.text = "DABSKY 3D STUDIO"
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
