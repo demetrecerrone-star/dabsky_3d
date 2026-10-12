@@ -62,6 +62,23 @@ jobs:
           test -d "$ANDROID_HOME/platforms/android-35"
           test -d "$ANDROID_HOME/build-tools/35.0.0"
           grep -E "export/android/(android_sdk_path|java_sdk_path)" "$HOME/.config/godot/editor_settings-4.tres"
+      - name: Apply Dabsky launcher icon when media is present
+        run: |
+          if [ -s assets/dabsky-icon.png ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          project = Path("project.godot")
+          text = project.read_text()
+          if 'config/icon="res://assets/dabsky-icon.png"' not in text:
+              text = text.replace('config/name="Dabsky 3D Studio"', 'config/name="Dabsky 3D Studio"\\nconfig/icon="res://assets/dabsky-icon.png"'.replace('\\n', '\n'))
+          project.write_text(text)
+          preset = Path("export_presets.cfg")
+          text = preset.read_text()
+          if 'launcher_icons/main_192x192=' not in text:
+              text += '\nlauncher_icons/main_192x192="res://assets/dabsky-icon.png"\n'
+          preset.write_text(text)
+          PY
+          fi
       - name: Validate Godot project
         run: godot --headless --verbose --path . --editor --quit
       - name: Configure permanent signing if secrets exist
