@@ -35,24 +35,32 @@ jobs:
       - name: Configure Android editor settings
         run: |
           mkdir -p "$HOME/.config/godot"
-          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          cat > "$HOME/.config/godot/editor_settings-4.4.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
           export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
           EOF
       - name: Create Android debug signing key
         run: |
           mkdir -p "$HOME/.android"
           keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
       - name: Validate Godot project
-        run: godot --headless --path . --editor --quit
+        run: godot --headless --verbose --path . --editor --quit
       - name: Export debug APK
         run: |
           mkdir -p build
-          godot --headless --path . --export-debug Android build/dabsky-3d-debug.apk
+          godot --headless --verbose --path . --export-debug Android build/dabsky-3d-debug.apk
           test -s build/dabsky-3d-debug.apk
+      - name: Verify APK signature and package
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose build/dabsky-3d-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging build/dabsky-3d-debug.apk
+          sha256sum build/dabsky-3d-debug.apk
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
