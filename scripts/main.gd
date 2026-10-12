@@ -2,6 +2,12 @@ extends Control
 
 const GlbIO = preload("res://scripts/glb_io.gd")
 const MeshEdit = preload("res://scripts/mesh_edit.gd")
+const DabskyAI = preload("res://scripts/dabsky_ai.gd")
+var ai_panel: VBoxContainer
+var ai_prompt: LineEdit
+var ai_history: RichTextLabel
+var ai_messages: Array[String] = []
+const AI_HISTORY_LIMIT := 16
 var mesh_mode := "Object"
 var picked_surface := -1
 var picked_face := -1
@@ -95,6 +101,8 @@ func _ready() -> void:
 	_add_button(shapes, "Material", _toggle_material_panel)
 	_add_button(shapes, "Precise", _toggle_transform_panel)
 	_add_button(shapes, "Edit Mesh", _toggle_mesh_mode)
+	_add_button(shapes, "Dabsky AI", _toggle_ai_panel)
+	_build_ai_panel(layout)
 	_build_material_panel(layout)
 	_build_transform_panel(layout)
 	_build_glb_dialogs()
@@ -190,6 +198,180 @@ func _ready() -> void:
 	_add_primitive("Cube", false)
 	get_viewport().size_changed.connect(_refresh_screen_fit)
 	call_deferred("_refresh_screen_fit")
+
+func _build_ai_panel(parent: VBoxContainer) -> void:
+	ai_panel = VBoxContainer.new()
+	ai_panel.visible = false
+	ai_panel.add_theme_constant_override("separation", 5)
+	parent.add_child(ai_panel)
+	var heading := HBoxContainer.new()
+	ai_panel.add_child(heading)
+	var title := Label.new()
+	title.text = "DABSKY AI • Offline modeling assistant"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 17)
+	heading.add_child(title)
+	_add_button(heading, "Hide", _toggle_ai_panel)
+	ai_history = RichTextLabel.new()
+	ai_history.bbcode_enabled = false
+	ai_history.scroll_following = true
+	ai_history.custom_minimum_size = Vector2(0, 94)
+	ai_history.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ai_panel.add_child(ai_history)
+	var command_row := HBoxContainer.new()
+	ai_panel.add_child(command_row)
+	ai_prompt = LineEdit.new()
+	ai_prompt.max_length = 500
+	ai_prompt.placeholder_text = "Try: create a cube and make it purple"
+	ai_prompt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ai_prompt.text_submitted.connect(func(_text: String): _submit_ai())
+	command_row.add_child(ai_prompt)
+	_add_button(command_row, "Ask", _submit_ai)
+	_add_button(command_row, "Examples", _ai_examples)
+	_ai_log("Dabsky AI", "Ready. I work offline with basic shapes, transforms, materials and project commands.")
+
+func _toggle_ai_panel() -> void:
+	ai_panel.visible = not ai_panel.visible
+	if ai_panel.visible:
+		# Keep the modeling viewport usable on phone screens.
+		material_panel.visible = false
+		transform_panel.visible = false
+		object_panel.visible = false
+		status.text = "Dabsky AI ready. Supported commands work without internet."
+	else:
+		status.text = "AI panel hidden. Modeling tools remain available."
+
+func _ai_examples() -> void:
+	_ai_log("Dabsky AI", DabskyAI.HELP)
+
+func _ai_log(speaker: String, message: String) -> void:
+	ai_messages.append("%s: %s" % [speaker, message])
+	while ai_messages.size() > AI_HISTORY_LIMIT:
+		ai_messages.pop_front()
+	if ai_history != null:
+		ai_history.text = "\n".join(PackedStringArray(ai_messages))
+
+func _submit_ai() -> void:
+	var prompt := ai_prompt.text.strip_edges()
+	if prompt.is_empty():
+		status.text = "Enter a modeling instruction."
+		return
+	ai_prompt.clear()
+	_ai_log("You", prompt)
+	var outcome: Dictionary = _run_ai_prompt(prompt)
+	_ai_log("Dabsky AI", str(outcome.get("message", "Unknown result.")))
+	status.text = str(outcome.get("message", "Unknown result.")).substr(0, 160)
+
+func _run_ai_prompt(prompt: String) -> Dictionary:
+	var parsed: Dictionary = DabskyAI.interpret(prompt)
+	if not bool(parsed.get("ok", false)):
+		return parsed
+	var actions: Array = parsed.get("actions", [])
+	if actions.is_empty():
+		return {"ok": true, "message": str(parsed.get("message", DabskyAI.HELP))}
+	# Never start a partially understood request: the interpreter validates each
+	# clause before this executor sees any actions. The executor only accepts
+	# whitelisted operations and refuses actions requiring a missing selection.
+	var description: Array[String] = []
+	var has_selection: bool = selected != null
+	for item in actions:
+		var action: Dictionary = item
+		var op: String = str(action.get("op", ""))
+		match op:
+			"create":
+				if objects.size() + int(action.get("count", 1)) > OBJECT_LIMIT:
+					return {"ok": false, "message": "The scene limit is 100 objects."}
+				has_selection = true
+			"select":
+				var name: String = str(action.get("name", ""))
+				if _ai_find_object(name) == null:
+					return {"ok": false, "message": "Couldn't find object: " + name + ". Open Objects to see names."}
+				has_selection = true
+			"move", "rotate", "scale", "set_transform", "color", "material", "rename", "duplicate", "delete":
+				if not has_selection:
+					return {"ok": false, "message": "Select or create an object first."}
+				if op == "delete":
+					has_selection = objects.size() > 1
+			"undo", "redo", "save", "reset_view":
+				pass
+			_:
+				return {"ok": false, "message": "Unsupported action: " + op}
+	_cancel()
+	for item in actions:
+		var action: Dictionary = item
+		var op: String = str(action.get("op", ""))
+		match op:
+			"create":
+				var kind: String = str(action["kind"])
+				var count: int = int(action["count"])
+				for _index in range(count):
+					_add_primitive(kind)
+				description.append("Created %d %s" % [count, kind])
+			"select":
+				_select_object(_ai_find_object(str(action["name"])))
+				description.append("Selected " + selected.name)
+			"move":
+				_record_change()
+				selected.position += action["delta"]
+				description.append("Moved " + selected.name)
+			"rotate":
+				_record_change()
+				var axis := _ai_axis(str(action["axis"]))
+				selected.rotate_object_local(axis, deg_to_rad(float(action["degrees"])))
+				description.append("Rotated " + selected.name)
+			"scale":
+				_record_change()
+				selected.scale *= float(action["factor"])
+				description.append("Scaled " + selected.name)
+			"set_transform":
+				_change_transform_field(float(action["value"]), str(action["property"]), str(action["axis"]))
+				description.append("Set %s %s" % [str(action["property"]), str(action["axis"])])
+			"color":
+				_record_change()
+				_change_material_color(action["color"])
+				description.append("Changed color")
+			"material":
+				_record_change()
+				var key := "Metallic" if str(action["property"]) == "metallic" else "Roughness"
+				_change_material_scalar(float(action["value"]), key)
+				description.append("Set " + key)
+			"rename":
+				_record_change()
+				selected.name = str(action["name"]).substr(0, 48)
+				_select_object(selected)
+				description.append("Renamed object")
+			"duplicate":
+				_duplicate_selected()
+				description.append("Duplicated selected object")
+			"delete":
+				_delete_selected()
+				description.append("Deleted selected object")
+			"undo":
+				_undo()
+				description.append("Undid previous change")
+			"redo":
+				_redo()
+				description.append("Redid previous change")
+			"save":
+				_save_project()
+				description.append("Saved project")
+			"reset_view":
+				_reset_view()
+				description.append("Reset view")
+	_sync_selection_fields()
+	return {"ok": true, "message": ". ".join(description) + ".", "actions": actions}
+
+func _ai_axis(axis: String) -> Vector3:
+	match axis:
+		"x": return Vector3.RIGHT
+		"z": return Vector3.BACK
+		_: return Vector3.UP
+
+func _ai_find_object(search_name: String) -> MeshInstance3D:
+	for obj in objects:
+		if obj.name.to_lower() == search_name.to_lower():
+			return obj
+	return null
 
 func _add_button(parent: Control, label: String, callback: Callable) -> void:
 	var button := Button.new()

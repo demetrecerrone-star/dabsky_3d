@@ -93,6 +93,8 @@ jobs:
         run: godot --headless --path . --script res://tests/v04_roundtrip.gd
       - name: Face extrusion, inset and vertex editing round-trip tests
         run: godot --headless --path . --script res://tests/v05_mesh_edit.gd
+      - name: Dabsky AI offline assistant integration tests
+        run: godot --headless --path . --script res://tests/v06_ai_commands.gd
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}
