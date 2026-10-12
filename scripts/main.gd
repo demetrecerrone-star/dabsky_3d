@@ -12,14 +12,20 @@ var orbit_yaw := 0.55
 var orbit_pitch := 0.35
 var orbit_distance := 8.0
 var camera: Camera3D
+var menu_layer: Control
+var workspace_layer: Control
+var menu_video: VideoStreamPlayer
 var dragging := false
 var last_touch := Vector2.ZERO
 
 func _ready() -> void:
 	get_viewport().gui_embed_subwindows = true
+	_build_menu()
 	var layout := VBoxContainer.new()
 	layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	workspace_layer = layout
 	add_child(layout)
+	layout.visible = false
 	var toolbar := HBoxContainer.new()
 	layout.add_child(toolbar)
 	_add_button(toolbar, "Add Cube", _add_cube)
@@ -183,3 +189,48 @@ func _input(event: InputEvent) -> void:
 		orbit_yaw -= event.relative.x * 0.008
 		orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
 		_update_camera()
+
+func _build_menu() -> void:
+	menu_layer = Control.new()
+	menu_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(menu_layer)
+	var background := ColorRect.new()
+	background.color = Color(0.075, 0.035, 0.14)
+	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu_layer.add_child(background)
+	if ResourceLoader.exists("res://assets/dabsky-menu-loop.ogv"):
+		menu_video = VideoStreamPlayer.new()
+		menu_video.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		menu_video.expand = true
+		menu_video.stream = load("res://assets/dabsky-menu-loop.ogv")
+		menu_video.finished.connect(func(): menu_video.play())
+		menu_layer.add_child(menu_video)
+		menu_video.play()
+	var shade := ColorRect.new()
+	shade.color = Color(0, 0, 0, 0.46)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	menu_layer.add_child(shade)
+	var center := VBoxContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	center.custom_minimum_size = Vector2(380, 220)
+	center.position = Vector2(-190, -110)
+	center.add_theme_constant_override("separation", 22)
+	menu_layer.add_child(center)
+	var heading := Label.new()
+	heading.text = "DABSKY 3D STUDIO"
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 38)
+	center.add_child(heading)
+	var start := Button.new()
+	start.text = "START MODELING"
+	start.custom_minimum_size.y = 76
+	start.add_theme_font_size_override("font_size", 26)
+	start.pressed.connect(_enter_workspace)
+	center.add_child(start)
+
+func _enter_workspace() -> void:
+	if menu_video != null:
+		menu_video.stop()
+	menu_layer.visible = false
+	workspace_layer.visible = true
