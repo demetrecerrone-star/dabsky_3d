@@ -74,11 +74,13 @@ jobs:
           if [ -n "$SIGNING_KEY_B64" ] && [ -n "$SIGNING_PASSWORD" ] && [ -n "$SIGNING_ALIAS" ] && [ -n "$SIGNING_KEY_PASSWORD" ]; then
             printf '%s' "$SIGNING_KEY_B64" | base64 --decode > "$RUNNER_TEMP/dabsky-release.jks"
             chmod 600 "$RUNNER_TEMP/dabsky-release.jks"
+            keytool -list -keystore "$RUNNER_TEMP/dabsky-release.jks" -alias "$SIGNING_ALIAS" -storepass "$SIGNING_PASSWORD" > /dev/null
+            echo "Permanent signing keystore validated."
             echo "DABSKY_SIGNING_READY=true" >> "$GITHUB_ENV"
             echo "DABSKY_KEYSTORE_PATH=$RUNNER_TEMP/dabsky-release.jks" >> "$GITHUB_ENV"
           else
-            echo "DABSKY_SIGNING_READY=false" >> "$GITHUB_ENV"
-            echo "::warning::Permanent signing secrets not yet configured. Using debug signing."
+            echo "::error::Permanent signing secrets missing. Configure all four DABSKY_* repository secrets."
+            exit 1
           fi
       - name: Export Android APK
         id: export
@@ -106,7 +108,7 @@ jobs:
           test -s build/dabsky-3d.apk
       - name: Verify APK signature and package
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose build/dabsky-3d.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs build/dabsky-3d.apk
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging build/dabsky-3d.apk
           sha256sum build/dabsky-3d.apk
       - name: Upload APK
