@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
 permissions:
-  contents: read
+  contents: write
   issues: write
 jobs:
   build:
@@ -136,6 +136,17 @@ jobs:
           name: dabsky-3d-apk
           path: build/dabsky-3d.apk
           if-no-files-found: error
+      - name: Publish signed APK for direct download
+        id: release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="dabsky3d-latest"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Dabsky 3D — Latest Signed APK" --notes "Automatically published, verified Android APK. Updates use Dabsky's existing permanent signing key."
+          fi
+          gh release upload "$TAG" "build/dabsky-3d.apk#dabsky-3d.apk" --repo "$GITHUB_REPOSITORY" --clobber
       - name: Report build result
         if: always()
         env:
