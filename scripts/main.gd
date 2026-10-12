@@ -8,8 +8,15 @@ var status: Label
 var previous_transform: Transform3D
 var preview_active := false
 var undo_stack: Array[Transform3D] = []
+var orbit_yaw := 0.55
+var orbit_pitch := 0.35
+var orbit_distance := 8.0
+var camera: Camera3D
+var dragging := false
+var last_touch := Vector2.ZERO
 
 func _ready() -> void:
+	get_viewport().gui_embed_subwindows = true
 	var layout := VBoxContainer.new()
 	layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(layout)
@@ -17,6 +24,7 @@ func _ready() -> void:
 	layout.add_child(toolbar)
 	_add_button(toolbar, "Add Cube", _add_cube)
 	_add_button(toolbar, "Undo", _undo)
+	_add_button(toolbar, "Reset View", _reset_view)
 	var container := SubViewportContainer.new()
 	container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	container.stretch = true
@@ -27,30 +35,35 @@ func _ready() -> void:
 	container.add_child(viewport)
 	scene_root = Node3D.new()
 	viewport.add_child(scene_root)
-	var camera := Camera3D.new()
+	camera = Camera3D.new()
 	scene_root.add_child(camera)
-	camera.position = Vector3(4, 3, 6)
-	camera.look_at(Vector3.ZERO)
+	_update_camera()
 	camera.current = true
 	var light := DirectionalLight3D.new()
 	scene_root.add_child(light)
 	light.rotation_degrees = Vector3(-45, -30, 0)
+	_add_grid()
 	var controls := HBoxContainer.new()
 	layout.add_child(controls)
 	command_input = LineEdit.new()
-	command_input.placeholder_text = "move up 2 | rotate y 45 | scale 2 | height 1.5"
+	command_input.placeholder_text = "Example: move up 2" 
+	command_input.custom_minimum_size.y = 54
 	command_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	controls.add_child(command_input)
 	_add_button(controls, "Preview", _preview)
 	_add_button(controls, "Apply", _apply)
 	_add_button(controls, "Cancel", _cancel)
 	status = Label.new()
-	status.text = "Add a cube to begin."
+	status.text = "Drag to orbit the view. Try: move up 2, rotate y 45, scale 2."
+	status.add_theme_font_size_override("font_size", 18)
 	layout.add_child(status)
+	_add_cube()
 
 func _add_button(parent: Control, label: String, callback: Callable) -> void:
 	var button := Button.new()
 	button.text = label
+	button.custom_minimum_size = Vector2(115, 54)
+	button.add_theme_font_size_override("font_size", 18)
 	button.pressed.connect(callback)
 	parent.add_child(button)
 
@@ -60,7 +73,7 @@ func _add_cube() -> void:
 	selected.mesh = BoxMesh.new()
 	scene_root.add_child(selected)
 	undo_stack.clear()
-	status.text = "Cube selected."
+	status.text = "Cube selected. Drag the viewport to orbit."
 
 func _preview() -> void:
 	if selected == null:
@@ -119,3 +132,54 @@ func _undo() -> void:
 	elif selected != null and not undo_stack.is_empty():
 		selected.transform = undo_stack.pop_back()
 		status.text = "Undone."
+
+func _add_grid() -> void:
+	var grid_material := StandardMaterial3D.new()
+	grid_material.albedo_color = Color(0.36, 0.41, 0.47)
+	grid_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES, grid_material)
+	for i in range(-10, 11):
+		mesh.surface_add_vertex(Vector3(i, -0.52, -10))
+		mesh.surface_add_vertex(Vector3(i, -0.52, 10))
+		mesh.surface_add_vertex(Vector3(-10, -0.52, i))
+		mesh.surface_add_vertex(Vector3(10, -0.52, i))
+	mesh.surface_end()
+	var grid := MeshInstance3D.new()
+	grid.mesh = mesh
+	scene_root.add_child(grid)
+
+func _update_camera() -> void:
+	if camera == null:
+		return
+	camera.position = Vector3(sin(orbit_yaw) * cos(orbit_pitch), sin(orbit_pitch), cos(orbit_yaw) * cos(orbit_pitch)) * orbit_distance
+	camera.look_at(Vector3.ZERO)
+
+func _reset_view() -> void:
+	orbit_yaw = 0.55
+	orbit_pitch = 0.35
+	orbit_distance = 8.0
+	_update_camera()
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		dragging = event.pressed
+		last_touch = event.position
+	elif event is InputEventScreenDrag and dragging:
+		orbit_yaw -= event.relative.x * 0.008
+		orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
+		_update_camera()
+	elif event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			dragging = event.pressed
+			last_touch = event.position
+		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			orbit_distance = maxf(2.0, orbit_distance - 0.7)
+			_update_camera()
+		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			orbit_distance = minf(25.0, orbit_distance + 0.7)
+			_update_camera()
+	elif event is InputEventMouseMotion and dragging:
+		orbit_yaw -= event.relative.x * 0.008
+		orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
+		_update_camera()
