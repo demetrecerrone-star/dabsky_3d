@@ -44,8 +44,8 @@ jobs:
           EOF
       - name: Create Android debug signing key
         run: |
-          mkdir -p "$HOME/.local/share/godot"
-          keytool -genkeypair -v -keystore "$HOME/.local/share/godot/debug.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
       - name: Validate Godot project
         run: godot --headless --path . --editor --quit
       - name: Export debug APK
