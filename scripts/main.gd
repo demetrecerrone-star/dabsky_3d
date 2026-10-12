@@ -349,7 +349,7 @@ func _restore(snapshot: Dictionary) -> void:
 		if kind not in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
 			continue
 		_add_primitive(kind, false)
-		var obj := objects.back()
+		var obj: MeshInstance3D = objects.back()
 		obj.name = str(entry.get("name", kind)).substr(0, 48)
 		obj.position = _read_vec(entry.get("position"), Vector3.ZERO)
 		obj.rotation = _read_vec(entry.get("rotation"), Vector3.ZERO)
