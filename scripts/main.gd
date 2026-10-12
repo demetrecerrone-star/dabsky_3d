@@ -1,5 +1,17 @@
 extends Control
 
+const GlbIO = preload("res://scripts/glb_io.gd")
+const PROJECT_GLB := "user://dabsky-project.glb"
+var import_dialog: FileDialog
+var export_dialog: FileDialog
+var material_panel: VBoxContainer
+var transform_panel: GridContainer
+var material_color: ColorPickerButton
+var metallic_slider: HSlider
+var roughness_slider: HSlider
+var transform_inputs: Dictionary = {}
+var editing_selection_controls := false
+
 var selected: MeshInstance3D
 var viewport: SubViewport
 var scene_root: Node3D
@@ -68,6 +80,13 @@ func _ready() -> void:
 	_add_button(shapes, "New", _new_project)
 	_add_button(shapes, "Save", _save_project)
 	_add_button(shapes, "Load", _load_project)
+	_add_button(shapes, "Import GLB", _open_import_dialog)
+	_add_button(shapes, "Export GLB", _open_export_dialog)
+	_add_button(shapes, "Material", _toggle_material_panel)
+	_add_button(shapes, "Precise", _toggle_transform_panel)
+	_build_material_panel(layout)
+	_build_transform_panel(layout)
+	_build_glb_dialogs()
 	object_panel = VBoxContainer.new()
 	object_panel.visible = false
 	layout.add_child(object_panel)
@@ -152,6 +171,240 @@ func _add_button(parent: Control, label: String, callback: Callable) -> void:
 	button.pressed.connect(callback)
 	parent.add_child(button)
 
+func _build_glb_dialogs() -> void:
+	import_dialog = FileDialog.new()
+	import_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	import_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	import_dialog.use_native_dialog = true
+	import_dialog.filters = PackedStringArray(["*.glb ; Binary glTF 3D Model"])
+	import_dialog.file_selected.connect(_on_import_chosen)
+	add_child(import_dialog)
+	export_dialog = FileDialog.new()
+	export_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	export_dialog.use_native_dialog = true
+	export_dialog.filters = PackedStringArray(["*.glb ; Binary glTF 3D Model"])
+	export_dialog.current_file = "Dabsky-Model.glb"
+	export_dialog.file_selected.connect(_on_export_chosen)
+	add_child(export_dialog)
+
+func _open_import_dialog() -> void:
+	import_dialog.popup_centered()
+
+func _open_export_dialog() -> void:
+	if objects.is_empty():
+		status.text = "Add a shape or import a model before exporting."
+		return
+	export_dialog.popup_centered()
+
+func _on_import_chosen(path: String) -> void:
+	if not path.to_lower().ends_with(".glb") and not path.begins_with("content://"):
+		status.text = "Choose a .glb file."
+		return
+	var bytes: PackedByteArray = GlbIO.read_bytes(path)
+	if bytes.is_empty():
+		status.text = "Cannot read GLB (or larger than 80 MB)."
+		return
+	var added: int = _import_glb_bytes(bytes)
+	if added > 0:
+		status.text = "Imported %d mesh(es). Use Objects to select them." % added
+	else:
+		status.text = "Import failed: no supported static meshes found."
+
+func _import_glb_bytes(bytes: PackedByteArray) -> int:
+	var incoming: Array[MeshInstance3D] = GlbIO.decode_meshes(bytes)
+	if incoming.is_empty():
+		return 0
+	if incoming.size() > OBJECT_LIMIT - objects.size():
+		for obj in incoming:
+			obj.free()
+		status.text = "Scene limit: maximum 100 objects."
+		return 0
+	_cancel()
+	_record_change()
+	for obj in incoming:
+		obj.name = obj.name.substr(0, 48)
+		scene_root.add_child(obj)
+		objects.append(obj)
+	_select_object(incoming[0])
+	return incoming.size()
+
+func _on_export_chosen(path: String) -> void:
+	var actual_path := path
+	if not actual_path.begins_with("content://") and not actual_path.to_lower().ends_with(".glb"):
+		actual_path += ".glb"
+	var err: Error = _export_glb_to_path(actual_path)
+	if err == OK:
+		status.text = "GLB saved to the selected destination."
+	else:
+		status.text = "GLB export failed: %s" % error_string(err)
+
+func _export_glb_to_path(path: String) -> Error:
+	_cancel()
+	var bytes: PackedByteArray = GlbIO.encode_meshes(objects)
+	if bytes.is_empty():
+		return ERR_CANT_CREATE
+	return GlbIO.write_bytes(path, bytes)
+
+func _toggle_material_panel() -> void:
+	material_panel.visible = not material_panel.visible
+	if material_panel.visible:
+		transform_panel.visible = false
+	_sync_selection_fields()
+
+func _toggle_transform_panel() -> void:
+	transform_panel.visible = not transform_panel.visible
+	if transform_panel.visible:
+		material_panel.visible = false
+	_sync_selection_fields()
+
+func _build_material_panel(parent: VBoxContainer) -> void:
+	material_panel = VBoxContainer.new()
+	material_panel.visible = false
+	parent.add_child(material_panel)
+	var row := HBoxContainer.new()
+	material_panel.add_child(row)
+	var caption := Label.new()
+	caption.text = "Color"
+	row.add_child(caption)
+	material_color = ColorPickerButton.new()
+	material_color.custom_minimum_size = Vector2(90, 42)
+	material_color.color = Color(0.7, 0.7, 0.9)
+	material_color.get_popup().about_to_popup.connect(_record_material_start)
+	material_color.color_changed.connect(_change_material_color)
+	row.add_child(material_color)
+	for name in ["Metallic", "Roughness"]:
+		var slider_row := HBoxContainer.new()
+		material_panel.add_child(slider_row)
+		var label := Label.new()
+		label.text = name
+		label.custom_minimum_size.x = 100
+		slider_row.add_child(label)
+		var slider := HSlider.new()
+		slider.min_value = 0.0
+		slider.max_value = 1.0
+		slider.step = 0.01
+		slider.custom_minimum_size.x = 200
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slider.drag_started.connect(_record_material_start)
+		slider.value_changed.connect(_change_material_scalar.bind(name))
+		slider_row.add_child(slider)
+		if name == "Metallic":
+			metallic_slider = slider
+		else:
+			roughness_slider = slider
+
+func _build_transform_panel(parent: VBoxContainer) -> void:
+	transform_panel = GridContainer.new()
+	transform_panel.columns = 4
+	transform_panel.visible = false
+	parent.add_child(transform_panel)
+	for property_name in ["Position", "Rotation", "Scale"]:
+		var heading := Label.new()
+		heading.text = property_name
+		transform_panel.add_child(heading)
+		for axis in ["X", "Y", "Z"]:
+			var spin := SpinBox.new()
+			spin.custom_minimum_size.x = 120
+			spin.min_value = 0.01 if property_name == "Scale" else -9999.0
+			spin.max_value = 9999.0
+			spin.step = 0.01 if property_name != "Rotation" else 1.0
+			spin.allow_greater = false
+			spin.allow_lesser = false
+			spin.prefix = axis + " "
+			spin.value_changed.connect(_change_transform_field.bind(property_name, axis))
+			transform_panel.add_child(spin)
+			transform_inputs[property_name + axis] = spin
+
+func _record_material_start() -> void:
+	if selected != null and not editing_selection_controls:
+		_cancel()
+		_record_change()
+
+func _make_editable_material() -> StandardMaterial3D:
+	var source := _get_selected_material()
+	var material := StandardMaterial3D.new()
+	if source != null:
+		material.albedo_color = source.albedo_color
+		material.metallic = source.metallic
+		material.roughness = source.roughness
+		material.albedo_texture = source.albedo_texture
+	return material
+
+func _get_selected_material() -> StandardMaterial3D:
+	if selected == null:
+		return null
+	if selected.material_override is StandardMaterial3D:
+		return selected.material_override as StandardMaterial3D
+	if selected.mesh != null and selected.mesh.get_surface_count() > 0:
+		var original := selected.mesh.surface_get_material(0)
+		if original is StandardMaterial3D:
+			return original as StandardMaterial3D
+	return null
+
+func _change_material_color(color: Color) -> void:
+	if editing_selection_controls or selected == null:
+		return
+	var updated := _make_editable_material()
+	updated.albedo_color = color
+	selected.material_override = updated
+
+func _change_material_scalar(value: float, key: String) -> void:
+	if editing_selection_controls or selected == null:
+		return
+	var updated := _make_editable_material()
+	if key == "Metallic":
+		updated.metallic = value
+	else:
+		updated.roughness = value
+	selected.material_override = updated
+
+func _change_transform_field(value: float, property_name: String, axis: String) -> void:
+	if editing_selection_controls or selected == null:
+		return
+	_cancel()
+	_record_change()
+	var index := ["X", "Y", "Z"].find(axis)
+	var vector := Vector3.ZERO
+	match property_name:
+		"Position": vector = selected.position
+		"Rotation": vector = selected.rotation_degrees
+		"Scale": vector = selected.scale
+	if index == 0: vector.x = value
+	elif index == 1: vector.y = value
+	else: vector.z = value
+	match property_name:
+		"Position": selected.position = vector
+		"Rotation": selected.rotation_degrees = vector
+		"Scale": selected.scale = vector
+	_sync_selection_fields()
+
+func _sync_selection_fields() -> void:
+	editing_selection_controls = true
+	if selected != null and is_instance_valid(selected):
+		for property_name in ["Position", "Rotation", "Scale"]:
+			var value := Vector3.ZERO
+			match property_name:
+				"Position": value = selected.position
+				"Rotation": value = selected.rotation_degrees
+				"Scale": value = selected.scale
+			for axis in ["X", "Y", "Z"]:
+				var index := ["X", "Y", "Z"].find(axis)
+				var component := value.x if index == 0 else (value.y if index == 1 else value.z)
+				if transform_inputs.has(property_name + axis):
+					var spin: SpinBox = transform_inputs[property_name + axis]
+					spin.set_value_no_signal(component)
+		var mat := _get_selected_material()
+		if mat != null:
+			material_color.color = mat.albedo_color
+			metallic_slider.set_value_no_signal(mat.metallic)
+			roughness_slider.set_value_no_signal(mat.roughness)
+		else:
+			material_color.color = Color.WHITE
+			metallic_slider.set_value_no_signal(0.0)
+			roughness_slider.set_value_no_signal(1.0)
+	editing_selection_controls = false
+
 func _add_scrolling_toolbar(parent: VBoxContainer, contents: HBoxContainer) -> void:
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size.y = 53
@@ -213,6 +466,7 @@ func _select_object(obj: MeshInstance3D) -> void:
 		object_name_input.text = selected.name if selected != null else ""
 	if selected_label != null:
 		selected_label.text = ("Selected: " + selected.name + " • " + transform_mode) if selected != null else "Dabsky 3D • No object"
+	_sync_selection_fields()
 
 func _refresh_object_list() -> void:
 	if object_list == null:
@@ -255,8 +509,8 @@ func _duplicate_selected() -> void:
 	var source := selected
 	var kind: String = str(source.get_meta("kind", "Cube"))
 	var duplicate := MeshInstance3D.new()
-	duplicate.mesh = _make_mesh(kind)
-	duplicate.material_override = source.material_override
+	duplicate.mesh = source.mesh
+	duplicate.material_override = source.material_override.duplicate() if source.material_override != null else null
 	duplicate.name = source.name + "_copy"
 	duplicate.set_meta("kind", kind)
 	scene_root.add_child(duplicate)
@@ -308,6 +562,7 @@ func _nudge(axis: String, direction: int) -> void:
 		_:
 			selected.position += vec * (0.25 * direction)
 	status.text = "%s %s %s" % [transform_mode, axis, "+" if direction > 0 else "-"]
+	_sync_selection_fields()
 
 func _vec_array(value: Vector3) -> Array:
 	return [value.x, value.y, value.z]
@@ -325,14 +580,36 @@ func _read_vec(value: Variant, fallback: Vector3) -> Vector3:
 func _snapshot() -> Dictionary:
 	var entries := []
 	for obj in objects:
+		var material: StandardMaterial3D = obj.material_override as StandardMaterial3D
+		var color := Color.WHITE
+		var metallic := 0.0
+		var roughness := 1.0
+		if material != null:
+			color = material.albedo_color
+			metallic = material.metallic
+			roughness = material.roughness
 		entries.append({
 			"kind": obj.get_meta("kind", "Cube"),
 			"name": obj.name,
 			"position": _vec_array(obj.position),
 			"rotation": _vec_array(obj.rotation),
-			"scale": _vec_array(obj.scale)
+			"scale": _vec_array(obj.scale),
+			"mesh_resource": obj.mesh,
+			"material_resource": obj.material_override,
+			"has_material_override": material != null,
+			"albedo_color": [color.r, color.g, color.b, color.a],
+			"metallic": metallic,
+			"roughness": roughness
 		})
 	return {"objects": entries, "selected_index": objects.find(selected)}
+
+func _json_snapshot() -> Dictionary:
+	# Resource objects are kept in memory for undo but not serialized to JSON.
+	var snapshot := _snapshot()
+	for entry in snapshot["objects"]:
+		entry.erase("mesh_resource")
+		entry.erase("material_resource")
+	return snapshot
 
 func _restore(snapshot: Dictionary) -> void:
 	if selected != null and is_instance_valid(selected):
@@ -346,15 +623,36 @@ func _restore(snapshot: Dictionary) -> void:
 		if not entry is Dictionary or objects.size() >= OBJECT_LIMIT:
 			continue
 		var kind: String = str(entry.get("kind", "Cube"))
-		if kind not in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
+		if kind not in ["Cube", "Sphere", "Cylinder", "Plane", "Cone", "Imported"]:
 			continue
-		_add_primitive(kind, false)
-		var obj: MeshInstance3D = objects.back()
+		var mesh: Mesh = entry.get("mesh_resource", null)
+		if kind == "Imported" and mesh == null:
+			continue
+		var obj := MeshInstance3D.new()
+		obj.mesh = mesh if mesh != null else _make_mesh(kind)
 		obj.name = str(entry.get("name", kind)).substr(0, 48)
+		obj.set_meta("kind", kind)
+		scene_root.add_child(obj)
 		obj.position = _read_vec(entry.get("position"), Vector3.ZERO)
 		obj.rotation = _read_vec(entry.get("rotation"), Vector3.ZERO)
 		obj.scale = _read_vec(entry.get("scale"), Vector3.ONE)
-		obj.scale = Vector3(maxf(0.1, obj.scale.x), maxf(0.1, obj.scale.y), maxf(0.1, obj.scale.z))
+		obj.scale = Vector3(maxf(0.01, obj.scale.x), maxf(0.01, obj.scale.y), maxf(0.01, obj.scale.z))
+		if bool(entry.get("has_material_override", false)):
+			var mat := StandardMaterial3D.new()
+			var color_values: Array = entry.get("albedo_color", [1.0, 1.0, 1.0, 1.0])
+			if color_values.size() == 4:
+				mat.albedo_color = Color(float(color_values[0]), float(color_values[1]), float(color_values[2]), float(color_values[3]))
+			mat.metallic = clampf(float(entry.get("metallic", 0.0)), 0.0, 1.0)
+			mat.roughness = clampf(float(entry.get("roughness", 1.0)), 0.0, 1.0)
+			# Preserve imported texture and non-color settings from the original.
+			var original_material: Material = entry.get("material_resource", null)
+			if original_material is StandardMaterial3D:
+				var original: StandardMaterial3D = original_material
+				mat.albedo_texture = original.albedo_texture
+			obj.material_override = mat
+		else:
+			obj.material_override = entry.get("material_resource", null)
+		objects.append(obj)
 	var selected_index: int = int(snapshot.get("selected_index", -1))
 	_select_object(objects[selected_index] if selected_index >= 0 and selected_index < objects.size() else null)
 
@@ -375,16 +673,61 @@ func _redo() -> void:
 
 func _save_project() -> void:
 	_cancel()
+	if objects.is_empty():
+		status.text = "Add an object before saving."
+		return
+	# The GLB stores actual mesh data, including imported models and materials.
+	var bytes: PackedByteArray = GlbIO.encode_meshes(objects)
+	var export_error: Error = GlbIO.write_bytes(PROJECT_GLB, bytes)
+	if export_error != OK:
+		status.text = "Could not save model: " + error_string(export_error)
+		return
 	var file := FileAccess.open(PROJECT_FILE, FileAccess.WRITE)
 	if file == null:
-		status.text = "Cannot save project: %s" % error_string(FileAccess.get_open_error())
+		status.text = "Model saved, but its project metadata was not."
 		return
-	file.store_string(JSON.stringify({"format": 1, "scene": _snapshot()}))
+	file.store_string(JSON.stringify({"format": 2, "scene": _json_snapshot()}))
 	file.close()
-	status.text = "Project saved on this device."
+	status.text = "Project saved with its meshes and materials."
 
 func _load_project() -> void:
 	_cancel()
+	# Load the v0.4 GLB project first; support existing v0.3 JSON saves.
+	if FileAccess.file_exists(PROJECT_GLB):
+		var bytes: PackedByteArray = GlbIO.read_bytes(PROJECT_GLB)
+		var restored: Array[MeshInstance3D] = GlbIO.decode_meshes(bytes)
+		if restored.is_empty():
+			status.text = "Saved model could not be loaded."
+			return
+		var metadata: Dictionary = {}
+		if FileAccess.file_exists(PROJECT_FILE):
+			var meta_file := FileAccess.open(PROJECT_FILE, FileAccess.READ)
+			if meta_file != null:
+				var parsed: Variant = JSON.parse_string(meta_file.get_as_text())
+				if parsed is Dictionary:
+					metadata = parsed
+		var entries: Array = []
+		var old_scene: Variant = metadata.get("scene", {})
+		if old_scene is Dictionary:
+			entries = old_scene.get("objects", [])
+		_record_change()
+		_restore({"objects": [], "selected_index": -1})
+		for index in range(restored.size()):
+			var obj: MeshInstance3D = restored[index]
+			var kind := "Imported"
+			if index < entries.size() and entries[index] is Dictionary:
+				kind = str(entries[index].get("kind", "Imported"))
+			if kind not in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
+				kind = "Imported"
+			obj.set_meta("kind", kind)
+			scene_root.add_child(obj)
+			objects.append(obj)
+		var active := 0
+		if old_scene is Dictionary:
+			active = clampi(int(old_scene.get("selected_index", 0)), 0, objects.size() - 1)
+		_select_object(objects[active])
+		status.text = "Saved project loaded, including GLB meshes."
+		return
 	if not FileAccess.file_exists(PROJECT_FILE):
 		status.text = "No saved project yet. Tap Save first."
 		return
@@ -392,13 +735,13 @@ func _load_project() -> void:
 	if file == null:
 		status.text = "Could not read saved project."
 		return
-	var data = JSON.parse_string(file.get_as_text())
+	var data: Variant = JSON.parse_string(file.get_as_text())
 	if not data is Dictionary or not data.get("scene") is Dictionary:
 		status.text = "Project data is invalid."
 		return
 	_record_change()
 	_restore(data["scene"])
-	status.text = "Project loaded."
+	status.text = "Legacy project loaded."
 
 func _preview() -> void:
 	if selected == null:
@@ -439,6 +782,7 @@ func _preview() -> void:
 		return
 	preview_active = true
 	status.text = "Preview active. Apply or Cancel."
+	_sync_selection_fields()
 
 func _apply() -> void:
 	if preview_active:
@@ -446,11 +790,13 @@ func _apply() -> void:
 		redo_stack.clear()
 		preview_active = false
 		status.text = "Change applied."
+		_sync_selection_fields()
 
 func _cancel() -> void:
 	if preview_active and selected != null and is_instance_valid(selected):
 		selected.transform = previous_transform
 	preview_active = false
+	_sync_selection_fields()
 
 func _undo() -> void:
 	if preview_active:

@@ -89,6 +89,8 @@ jobs:
           fi
       - name: Exercise modeling workflow (create, edit, save, undo, load)
         run: godot --headless --path . --script res://tests/editor_smoke.gd
+      - name: GLB export/import and material round-trip tests
+        run: godot --headless --path . --script res://tests/v04_roundtrip.gd
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}
