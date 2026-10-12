@@ -73,20 +73,23 @@ static func decode_meshes(bytes: PackedByteArray) -> Array[MeshInstance3D]:
 	imported.free()
 	return output
 
-static func _collect_meshes(root: Node, output: Array[MeshInstance3D]) -> void:
+static func _collect_meshes(root: Node, output: Array[MeshInstance3D], parent_transform: Transform3D = Transform3D.IDENTITY) -> void:
 	if output.size() >= MAX_IMPORT_MESHES:
 		return
+	var world_transform := parent_transform
+	if root is Node3D:
+		world_transform = parent_transform * (root as Node3D).transform
 	if root is MeshInstance3D:
 		var source: MeshInstance3D = root
 		if source.mesh != null:
 			var copy := MeshInstance3D.new()
 			copy.name = source.name
 			copy.mesh = source.mesh
-			copy.transform = source.global_transform
+			copy.transform = world_transform
 			copy.material_override = source.material_override
 			copy.set_meta("kind", "Imported")
 			output.append(copy)
 	for child in root.get_children():
 		if output.size() >= MAX_IMPORT_MESHES:
 			return
-		_collect_meshes(child, output)
+		_collect_meshes(child, output, world_transform)
