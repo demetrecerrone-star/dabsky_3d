@@ -105,6 +105,8 @@ jobs:
         run: godot --headless --path . --script res://tests/v064_graphics_diagnostics.gd
       - name: Verify graphics diagnostics overlay preserves modeling viewport
         run: godot --headless --path . --script res://tests/v065_graphics_layout.gd
+      - name: Test Android tool categories, auto-fit and draggable graphics panel
+        run: godot --headless --path . --script res://tests/v066_mobile_ui.gd
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}
