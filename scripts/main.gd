@@ -1206,6 +1206,9 @@ func _pinch_center() -> Vector2:
 	return ((active_touches[pointers[0]] as Vector2) + (active_touches[pointers[1]] as Vector2)) * 0.5
 
 func _handle_touch_pressed(index: int, position: Vector2) -> void:
+	if graphics_diagnostics != null and graphics_diagnostics.detail_panel != null and graphics_diagnostics.detail_panel.visible:
+		if graphics_diagnostics.get_global_rect().has_point(position):
+			return
 	if not viewport_container.get_global_rect().has_point(position):
 		return
 	active_touches[index] = position
