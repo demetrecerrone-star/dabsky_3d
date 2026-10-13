@@ -90,6 +90,12 @@ var touch_scroll_toolbars: Array[ScrollContainer] = []
 var toolbar_touch_start: Dictionary = {}
 var toolbar_touch_dragged: Dictionary = {}
 var toolbar_swipe_blocked := false
+var active_tool_category := "Create"
+var category_buttons: Dictionary = {}
+var create_tools: ScrollContainer
+var project_tools: ScrollContainer
+var transform_tools: ScrollContainer
+var workspace_entered_once := false
 
 func _ready() -> void:
 	get_viewport().gui_embed_subwindows = true
@@ -132,20 +138,36 @@ func _ready() -> void:
 	graphics_diagnostics.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	graphics_overlay.add_child(graphics_diagnostics)
 	_position_graphics_overlay()
+	# Show only the active category's toolbar instead of stacking multiple
+	# tool rows across the phone's limited landscape height.
+	var categories := HBoxContainer.new()
+	categories.add_theme_constant_override("separation", 5)
+	layout.add_child(categories)
+	for category in ["Create", "Transform", "Edit", "Materials", "Project", "AI"]:
+		var tab := Button.new()
+		tab.text = category
+		tab.toggle_mode = true
+		tab.custom_minimum_size = Vector2(92, 42)
+		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tab.add_theme_font_size_override("font_size", 15)
+		tab.pressed.connect(_set_tool_category.bind(category))
+		categories.add_child(tab)
+		category_buttons[category] = tab
 	var shapes := HBoxContainer.new()
 	_add_scrolling_toolbar(layout, shapes)
+	create_tools = shapes.get_parent() as ScrollContainer
 	for kind in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
 		_add_button(shapes, "+ " + kind, _add_primitive.bind(kind))
-	_add_button(shapes, "Objects", _toggle_object_panel)
-	_add_button(shapes, "New", _new_project)
-	_add_button(shapes, "Save", _save_project)
-	_add_button(shapes, "Load", _load_project)
-	_add_button(shapes, "Import GLB", _open_import_dialog)
-	_add_button(shapes, "Export GLB", _open_export_dialog)
-	_add_button(shapes, "Material", _toggle_material_panel)
-	_add_button(shapes, "Precise", _toggle_transform_panel)
-	_add_button(shapes, "Edit Mesh", _toggle_mesh_mode)
-	_add_button(shapes, "Dabsky AI", _toggle_ai_panel)
+	var projectbar := HBoxContainer.new()
+	_add_scrolling_toolbar(layout, projectbar)
+	project_tools = projectbar.get_parent() as ScrollContainer
+	_add_button(projectbar, "Objects", _toggle_object_panel)
+	_add_button(projectbar, "New", _new_project)
+	_add_button(projectbar, "Save", _save_project)
+	_add_button(projectbar, "Load", _load_project)
+	_add_button(projectbar, "Import GLB", _open_import_dialog)
+	_add_button(projectbar, "Export GLB", _open_export_dialog)
+
 	_build_ai_panel(layout)
 	_build_material_panel(layout)
 	_build_transform_panel(layout)
@@ -193,6 +215,8 @@ func _ready() -> void:
 	_add_grid()
 	var editbar := HBoxContainer.new()
 	_add_scrolling_toolbar(layout, editbar)
+	transform_tools = editbar.get_parent() as ScrollContainer
+	_add_button(editbar, "Precise", _toggle_transform_panel)
 	for mode in ["Move", "Rotate", "Scale"]:
 		_add_button(editbar, mode, _set_transform_mode.bind(mode))
 	for axis in ["X", "Y", "Z"]:
@@ -244,6 +268,7 @@ func _ready() -> void:
 	highlight_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	highlight_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_add_primitive("Cube", false)
+	_set_tool_category("Create")
 	get_viewport().size_changed.connect(_refresh_screen_fit)
 	call_deferred("_refresh_screen_fit")
 
@@ -277,6 +302,29 @@ func _build_ai_panel(parent: VBoxContainer) -> void:
 	_add_button(command_row, "Ask", _submit_ai)
 	_add_button(command_row, "Examples", _ai_examples)
 	_ai_log("Dabsky AI", "Ready. I work offline with basic shapes, transforms, materials and project commands.")
+
+func _set_tool_category(category: String) -> void:
+	if not category_buttons.has(category):
+		return
+	active_tool_category = category
+	for key in category_buttons.keys():
+		var tab: Button = category_buttons[key]
+		tab.set_pressed_no_signal(key == category)
+	create_tools.visible = category == "Create"
+	project_tools.visible = category == "Project"
+	transform_tools.visible = category == "Transform"
+	mesh_tools_container.visible = category == "Edit"
+	# Only one expanded inspector at a time. The 3D view gets the rest.
+	object_panel.visible = false
+	material_panel.visible = category == "Materials"
+	transform_panel.visible = false
+	ai_panel.visible = category == "AI"
+	if category == "Edit" and mesh_mode == "Object" and selected != null:
+		_set_mesh_mode("Face")
+	elif category != "Edit" and mesh_mode != "Object":
+		_set_mesh_mode("Object")
+	_sync_selection_fields()
+	status.text = "%s tools ready. Swipe toolbar buttons to scroll." % category
 
 func _toggle_ai_panel() -> void:
 	ai_panel.visible = not ai_panel.visible
@@ -728,6 +776,7 @@ func _add_primitive(kind: String, track_undo: bool = true) -> void:
 	_cancel()
 	if track_undo:
 		_record_change()
+	var first_model := objects.is_empty()
 	var obj := MeshInstance3D.new()
 	obj.mesh = _make_mesh(kind)
 	obj.name = "%s_%d" % [kind, objects.size() + 1]
@@ -747,6 +796,8 @@ func _add_primitive(kind: String, track_undo: bool = true) -> void:
 	objects.append(obj)
 	_select_object(obj)
 	status.text = "%s created. Tap an axis or drag to orbit." % kind
+	if first_model and track_undo and workspace_layer.visible:
+		call_deferred("_fit_model_to_view")
 
 func _select_object(obj: MeshInstance3D) -> void:
 	_clear_mesh_selection()
@@ -1373,7 +1424,7 @@ func _set_mesh_mode(mode: String) -> void:
 		return
 	mesh_mode = mode
 	_clear_mesh_selection()
-	mesh_tools_container.visible = mesh_mode != "Object"
+	mesh_tools_container.visible = active_tool_category == "Edit"
 	if mode == "Object":
 		status.text = "Object mode. Tap meshes to select, drag to orbit."
 	elif mode == "Face":
@@ -1708,15 +1759,17 @@ func _position_graphics_overlay() -> void:
 	var bounds := graphics_overlay.size
 	if bounds.x <= 0.0:
 		bounds = get_viewport_rect().size
-	var width := minf(640.0, maxf(290.0, bounds.x * 0.68))
-	graphics_diagnostics.anchor_left = 1.0
-	graphics_diagnostics.anchor_right = 1.0
-	graphics_diagnostics.anchor_top = 0.0
-	graphics_diagnostics.anchor_bottom = 0.0
-	graphics_diagnostics.offset_left = -width - 8.0
-	graphics_diagnostics.offset_right = -8.0
-	graphics_diagnostics.offset_top = 54.0
-	graphics_diagnostics.offset_bottom = 54.0
+	var width := minf(570.0, maxf(290.0, bounds.x * 0.52))
+	width = minf(width, maxf(250.0, bounds.x - 16.0))
+	if graphics_diagnostics.get("panel_was_moved"):
+		graphics_diagnostics.call("clamp_inside_parent")
+		return
+	graphics_diagnostics.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	graphics_diagnostics.offset_left = maxf(8.0, bounds.x - width - 8.0)
+	graphics_diagnostics.offset_right = graphics_diagnostics.offset_left + width
+	# Default below the toolbar, leaving the controls unobstructed.
+	graphics_diagnostics.offset_top = clampf(bounds.y * 0.39, 165.0, maxf(165.0, bounds.y - 245.0))
+	graphics_diagnostics.offset_bottom = graphics_diagnostics.offset_top
 
 func _toggle_graphics_diagnostics() -> void:
 	if graphics_diagnostics != null:
@@ -1741,3 +1794,6 @@ func _enter_workspace() -> void:
 		menu_video.stop()
 	menu_layer.visible = false
 	workspace_layer.visible = true
+	if not workspace_entered_once:
+		workspace_entered_once = true
+		call_deferred("_fit_model_to_view")
