@@ -3,6 +3,7 @@ extends Control
 const GlbIO = preload("res://scripts/glb_io.gd")
 const MeshEdit = preload("res://scripts/mesh_edit.gd")
 const DabskyAI = preload("res://scripts/dabsky_ai.gd")
+const GraphicsDiagnostics = preload("res://scripts/graphics_diagnostics.gd")
 var ai_panel: VBoxContainer
 var ai_prompt: LineEdit
 var ai_history: RichTextLabel
@@ -56,6 +57,8 @@ var orbit_target := Vector3.ZERO
 var camera: Camera3D
 var menu_layer: Control
 var workspace_layer: MarginContainer
+var graphics_diagnostics: VBoxContainer
+var graphics_button: Button
 var menu_safe: MarginContainer
 var menu_logo: TextureRect
 var menu_heading: Label
@@ -105,6 +108,14 @@ func _ready() -> void:
 	selected_label.add_theme_font_size_override("font_size", 17)
 	titlebar.add_child(selected_label)
 	_add_button(titlebar, "Menu", _leave_workspace)
+	graphics_button = Button.new()
+	graphics_button.text = "Graphics"
+	graphics_button.custom_minimum_size = Vector2(108, 48)
+	graphics_button.add_theme_font_size_override("font_size", 16)
+	graphics_button.pressed.connect(_toggle_graphics_diagnostics)
+	titlebar.add_child(graphics_button)
+	graphics_diagnostics = GraphicsDiagnostics.new()
+	layout.add_child(graphics_diagnostics)
 	var shapes := HBoxContainer.new()
 	_add_scrolling_toolbar(layout, shapes)
 	for kind in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
@@ -159,6 +170,7 @@ func _ready() -> void:
 	scene_root.add_child(camera)
 	_update_camera()
 	camera.current = true
+	graphics_diagnostics.configure(graphics_button, viewport, camera)
 	var light := DirectionalLight3D.new()
 	scene_root.add_child(light)
 	light.rotation_degrees = Vector3(-45, -30, 0)
@@ -1667,6 +1679,10 @@ func _resize_menu_content(available: Vector2) -> void:
 	menu_start.add_theme_font_size_override("font_size", clampi(int(available.x / 28.0), 16, 24))
 	menu_start.custom_minimum_size = Vector2(clampf(available.x * 0.65, 170.0, 320.0), clampf(available.y * 0.13, 44.0, 66.0))
 	menu_box.add_theme_constant_override("separation", clampi(int(available.y * 0.025), 4, 16))
+
+func _toggle_graphics_diagnostics() -> void:
+	if graphics_diagnostics != null:
+		graphics_diagnostics.toggle_panel()
 
 func _leave_workspace() -> void:
 	_clear_touch_gesture()
