@@ -27,6 +27,10 @@ var consecutive_recovered_samples := 0
 var performance_warning := false
 var warning_history: Array[String] = []
 var last_event := ""
+var panel_was_moved := false
+var panel_drag_touch := -1
+var panel_dragging_mouse := false
+var panel_drag_previous := Vector2.ZERO
 
 func _ready() -> void:
 	detail_panel = PanelContainer.new()
@@ -35,10 +39,16 @@ func _ready() -> void:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 5)
 	detail_panel.add_child(column)
-	var caption := Label.new()
-	caption.text = "Graphics Diagnostics · live device report"
-	caption.add_theme_font_size_override("font_size", 16)
-	column.add_child(caption)
+	# A generous handle can be dragged with a finger without closing the panel.
+	var grip := Button.new()
+	grip.name = "DragGraphics"
+	grip.text = "≡ Drag Graphics Diagnostics"
+	grip.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	grip.mouse_filter = Control.MOUSE_FILTER_STOP
+	grip.custom_minimum_size.y = 42.0
+	grip.add_theme_font_size_override("font_size", 16)
+	grip.gui_input.connect(_handle_panel_grip_input)
+	column.add_child(grip)
 	var info_scroll := ScrollContainer.new()
 	info_scroll.custom_minimum_size.y = 132.0
 	info_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -73,6 +83,41 @@ func _ready() -> void:
 	column.add_child(copy_status)
 	refresh_report()
 
+# Dragging a floating report never resizes the viewport or changes models.
+func clamp_inside_parent() -> void:
+	var parent_control := get_parent() as Control
+	if parent_control == null or not is_instance_valid(parent_control):
+		return
+	var limit: Vector2 = (parent_control.size - size).max(Vector2.ZERO)
+	position = Vector2(clampf(position.x, 0.0, limit.x), clampf(position.y, 0.0, limit.y))
+
+func _move_panel_by(delta: Vector2) -> void:
+	if delta.length_squared() < 0.01:
+		return
+	position += delta
+	panel_was_moved = true
+	clamp_inside_parent()
+
+func _handle_panel_grip_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			panel_drag_touch = event.index
+			panel_drag_previous = event.position
+		elif panel_drag_touch == event.index:
+			panel_drag_touch = -1
+	elif event is InputEventScreenDrag and event.index == panel_drag_touch:
+		_move_panel_by(event.position - panel_drag_previous)
+		panel_drag_previous = event.position
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed and panel_drag_touch < 0:
+			panel_dragging_mouse = true
+			panel_drag_previous = event.global_position
+		elif not event.pressed:
+			panel_dragging_mouse = false
+	elif event is InputEventMouseMotion and panel_dragging_mouse and panel_drag_touch < 0:
+		_move_panel_by(event.global_position - panel_drag_previous)
+		panel_drag_previous = event.global_position
+
 func configure(button: Button, target_viewport: SubViewport, target_camera: Camera3D, fps_label: Label = null) -> void:
 	diagnostics_button = button
 	fps_badge = fps_label
@@ -84,6 +129,7 @@ func toggle_panel() -> void:
 	detail_panel.visible = not detail_panel.visible
 	if detail_panel.visible:
 		refresh_report()
+		call_deferred("clamp_inside_parent")
 
 func _process(delta: float) -> void:
 	if not is_visible_in_tree() or scene_viewport == null:
