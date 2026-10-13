@@ -23,8 +23,8 @@ func _verify() -> void:
 	editor.call("_enter_workspace")
 	await process_frame
 	var rows: Array = editor.get("touch_scroll_toolbars")
-	if rows.size() != 3:
-		_fail("Expected three horizontal modeling toolbar scroll areas")
+	if rows.size() != 4:
+		_fail("Expected four swipeable toolbars (Create, Project, Transform, Edit)")
 		return
 	for scroll in rows:
 		if scroll.scroll_deadzone != 18:
