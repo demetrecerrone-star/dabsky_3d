@@ -1,5 +1,7 @@
 extends SceneTree
 
+const MeshEdit = preload("res://scripts/mesh_edit.gd")
+
 func _initialize() -> void:
 	call_deferred("_verify")
 
@@ -67,7 +69,7 @@ func _verify() -> void:
 		return
 	# Moving a tap a few pixels away from a corner should still snap to it.
 	editor.call("_set_mesh_mode", "Vertex")
-	var data: Dictionary = load("res://scripts/mesh_edit.gd")._surface_data(selected.mesh, 0)
+	var data: Dictionary = MeshEdit._surface_data(selected.mesh, 0)
 	if data.is_empty():
 		_fail("Cube surface has no pickable vertices")
 		return
@@ -75,12 +77,14 @@ func _verify() -> void:
 	var point: Vector3 = selected.global_transform * vertices[0]
 	var camera: Camera3D = editor.get("camera")
 	var uv: Vector2 = camera.unproject_position(point)
-	var click: Vector2 = rect.position + uv * rect.size / Vector2(editor.get("viewport").size) + Vector2(12, 0)
+	var subviewport: SubViewport = editor.get("viewport")
+	var click: Vector2 = rect.position + uv * rect.size / Vector2(subviewport.size) + Vector2(12, 0)
 	var snapped: Dictionary = editor.call("_nearest_touch_vertex", click)
 	if snapped.is_empty():
 		_fail("Touch-tolerant vertex selection missed a nearby corner")
 		return
-	if (snapped["vertex"] as Vector3).distance_to(vertices[0]) > 1.8:
+	var picked: Vector3 = snapped["vertex"]
+	if picked.distance_to(vertices[0]) > 1.8:
 		_fail("Nearest screen-space vertex was not located")
 		return
 	selected.position = old_position
