@@ -8,8 +8,11 @@ const LOW_FPS_LIMIT := 18.0
 const FPS_RECOVER_LIMIT := 25.0
 const LOW_FPS_SECONDS := 4
 const WARNING_HISTORY_LIMIT := 6
+const MIN_USABLE_VIEWPORT_HEIGHT := 160
+const MAX_USABLE_VIEWPORT_ASPECT := 5.0
 
 var diagnostics_button: Button
+var fps_badge: Label
 var scene_viewport: SubViewport
 var scene_camera: Camera3D
 var detail_panel: PanelContainer
@@ -70,8 +73,9 @@ func _ready() -> void:
 	column.add_child(copy_status)
 	refresh_report()
 
-func configure(button: Button, target_viewport: SubViewport, target_camera: Camera3D) -> void:
+func configure(button: Button, target_viewport: SubViewport, target_camera: Camera3D, fps_label: Label = null) -> void:
 	diagnostics_button = button
+	fps_badge = fps_label
 	scene_viewport = target_viewport
 	scene_camera = target_camera
 	refresh_report()
@@ -125,7 +129,9 @@ func _record_warning(message: String) -> void:
 func _viewport_problem() -> bool:
 	if scene_viewport == null or not is_instance_valid(scene_viewport):
 		return true
-	if scene_viewport.size.x < 32 or scene_viewport.size.y < 32:
+	if scene_viewport.size.x < 32 or scene_viewport.size.y < MIN_USABLE_VIEWPORT_HEIGHT:
+		return true
+	if float(scene_viewport.size.x) / float(scene_viewport.size.y) > MAX_USABLE_VIEWPORT_ASPECT:
 		return true
 	if scene_camera == null or not is_instance_valid(scene_camera):
 		return true
@@ -158,7 +164,7 @@ func get_report() -> String:
 	else:
 		report += "3D viewport: not configured\n"
 	if _viewport_problem():
-		report += "OBSERVED WARNING: 3D viewport or camera is unavailable.\n"
+		report += "OBSERVED WARNING: 3D viewport is too small, unusually wide, or the camera is unavailable.\n"
 	if performance_warning:
 		report += "OBSERVED WARNING: sustained low frame rate.\n"
 	if not _viewport_problem() and not performance_warning:
@@ -170,6 +176,8 @@ func get_report() -> String:
 	return report
 
 func refresh_report() -> void:
+	if fps_badge != null:
+		fps_badge.text = "FPS %d" % roundi(last_fps) if last_fps >= 0.0 else "FPS --"
 	if report_label != null:
 		report_label.text = get_report()
 	if diagnostics_button == null:
