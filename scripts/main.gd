@@ -59,6 +59,8 @@ var menu_layer: Control
 var workspace_layer: MarginContainer
 var graphics_diagnostics: VBoxContainer
 var graphics_button: Button
+var graphics_fps_label: Label
+var graphics_overlay: Control
 var menu_safe: MarginContainer
 var menu_logo: TextureRect
 var menu_heading: Label
@@ -114,8 +116,22 @@ func _ready() -> void:
 	graphics_button.add_theme_font_size_override("font_size", 16)
 	graphics_button.pressed.connect(_toggle_graphics_diagnostics)
 	titlebar.add_child(graphics_button)
+	graphics_fps_label = Label.new()
+	graphics_fps_label.text = "FPS --"
+	graphics_fps_label.custom_minimum_size.x = 82
+	graphics_fps_label.add_theme_font_size_override("font_size", 16)
+	titlebar.add_child(graphics_fps_label)
+	# Diagnostics are an overlay, not a vertical layout row. Opening the report
+	# must never steal height from the actual 3D modeling viewport.
+	graphics_overlay = Control.new()
+	graphics_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	graphics_overlay.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	graphics_overlay.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	workspace_layer.add_child(graphics_overlay)
 	graphics_diagnostics = GraphicsDiagnostics.new()
-	layout.add_child(graphics_diagnostics)
+	graphics_diagnostics.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	graphics_overlay.add_child(graphics_diagnostics)
+	_position_graphics_overlay()
 	var shapes := HBoxContainer.new()
 	_add_scrolling_toolbar(layout, shapes)
 	for kind in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
@@ -170,7 +186,7 @@ func _ready() -> void:
 	scene_root.add_child(camera)
 	_update_camera()
 	camera.current = true
-	graphics_diagnostics.configure(graphics_button, viewport, camera)
+	graphics_diagnostics.configure(graphics_button, viewport, camera, graphics_fps_label)
 	var light := DirectionalLight3D.new()
 	scene_root.add_child(light)
 	light.rotation_degrees = Vector3(-45, -30, 0)
@@ -1666,6 +1682,7 @@ func _refresh_screen_fit() -> void:
 		panel.add_theme_constant_override("margin_bottom", bottom)
 	var available := viewport_size - Vector2(left + right, top + bottom)
 	_resize_menu_content(available)
+	_position_graphics_overlay()
 	_update_fit_label()
 
 func _resize_menu_content(available: Vector2) -> void:
@@ -1679,6 +1696,24 @@ func _resize_menu_content(available: Vector2) -> void:
 	menu_start.add_theme_font_size_override("font_size", clampi(int(available.x / 28.0), 16, 24))
 	menu_start.custom_minimum_size = Vector2(clampf(available.x * 0.65, 170.0, 320.0), clampf(available.y * 0.13, 44.0, 66.0))
 	menu_box.add_theme_constant_override("separation", clampi(int(available.y * 0.025), 4, 16))
+
+func _position_graphics_overlay() -> void:
+	if graphics_overlay == null or graphics_diagnostics == null:
+		return
+	# The parent MarginContainer fills the usable space inside Android insets.
+	# Place the overlay under the title bar, flush to the right edge.
+	var bounds := graphics_overlay.size
+	if bounds.x <= 0.0:
+		bounds = get_viewport_rect().size
+	var width := minf(640.0, maxf(290.0, bounds.x * 0.68))
+	graphics_diagnostics.anchor_left = 1.0
+	graphics_diagnostics.anchor_right = 1.0
+	graphics_diagnostics.anchor_top = 0.0
+	graphics_diagnostics.anchor_bottom = 0.0
+	graphics_diagnostics.offset_left = -width - 8.0
+	graphics_diagnostics.offset_right = -8.0
+	graphics_diagnostics.offset_top = 54.0
+	graphics_diagnostics.offset_bottom = 54.0
 
 func _toggle_graphics_diagnostics() -> void:
 	if graphics_diagnostics != null:
