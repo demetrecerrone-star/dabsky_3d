@@ -42,7 +42,7 @@ func _verify() -> void:
 	if not (closer < initial_distance):
 		_fail("Pinch-out must zoom in: %s -> %s" % [initial_distance, closer])
 		return
-	if not is_equal_approx(float(editor.get("orbit_yaw")), initial_y) or not is_equal_approx(float(editor.get("orbit_pitch")), initial_pitch):
+	if not is_equal_approx(float(editor.get("orbit_yaw")), initial_yaw) or not is_equal_approx(float(editor.get("orbit_pitch")), initial_pitch):
 		_fail("Two finger zoom must not orbit camera")
 		return
 	var p2_in := rect.position + Vector2(rect.size.x * 0.46, rect.size.y * 0.48)
