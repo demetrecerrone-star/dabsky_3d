@@ -97,6 +97,8 @@ jobs:
         run: godot --headless --path . --script res://tests/v06_ai_commands.gd
       - name: Test Android two-finger pinch-to-zoom and orbit gestures
         run: godot --headless --path . --script res://tests/v061_touch_camera.gd
+      - name: Test swiping on modeling toolbar buttons without accidental activation
+        run: godot --headless --path . --script res://tests/v062_toolbar_scroll.gd
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}
