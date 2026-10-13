@@ -68,6 +68,14 @@ const SCREEN_FIT_MAX := 80
 var menu_video: VideoStreamPlayer
 var dragging := false
 var last_touch := Vector2.ZERO
+var active_touches: Dictionary = {}
+var pinch_previous_distance := 0.0
+var pinch_active := false
+var pinch_tap_blocked := false
+const CAMERA_MIN_DISTANCE := 0.65
+const CAMERA_MAX_DISTANCE := 80.0
+const PINCH_MIN_SPACING := 12.0
+const PINCH_ZOOM_SPEED := 1.0
 
 func _ready() -> void:
 	get_viewport().gui_embed_subwindows = true
@@ -156,6 +164,8 @@ func _ready() -> void:
 	_add_button(editbar, "Undo", _undo)
 	_add_button(editbar, "Redo", _redo)
 	_add_button(editbar, "Reset View", _reset_view)
+	_add_button(editbar, "Zoom +", func(): _zoom_by_ratio(0.8))
+	_add_button(editbar, "Zoom -", func(): _zoom_by_ratio(1.25))
 	_add_button(editbar, "Fit -", func(): _adjust_screen_fit(-SCREEN_FIT_STEP))
 	_add_button(editbar, "Fit +", func(): _adjust_screen_fit(SCREEN_FIT_STEP))
 	var meshbar := HBoxContainer.new()
@@ -182,7 +192,7 @@ func _ready() -> void:
 	_add_button(command_row, "Apply", _apply)
 	_add_button(command_row, "Cancel", _cancel)
 	status = Label.new()
-	status.text = "Tap an object to select. Drag to orbit. Choose Move / Rotate / Scale and tap an axis."
+	status.text = "Tap to select • one finger to orbit • pinch with two fingers to zoom • Zoom +/- also available."
 	status.add_theme_font_size_override("font_size", 16)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.max_lines_visible = 2
@@ -1043,55 +1053,138 @@ func _update_camera() -> void:
 	camera.look_at(Vector3.ZERO)
 
 func _reset_view() -> void:
+	_clear_touch_gesture()
 	orbit_yaw = 0.55
 	orbit_pitch = 0.35
 	orbit_distance = 8.0
 	_update_camera()
 
+func _zoom_by_ratio(ratio: float) -> void:
+	# Camera moves toward its orbit target; model transforms remain untouched.
+	if not is_finite(ratio) or ratio <= 0.0:
+		return
+	orbit_distance = clampf(orbit_distance * ratio, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE)
+	_update_camera()
+
+func _clear_touch_gesture() -> void:
+	active_touches.clear()
+	pinch_previous_distance = 0.0
+	pinch_active = false
+	pinch_tap_blocked = false
+	dragging = false
+
+func _pinch_distance() -> float:
+	if active_touches.size() < 2:
+		return 0.0
+	var pointers: Array = active_touches.keys()
+	return (active_touches[pointers[0]] as Vector2).distance_to(active_touches[pointers[1]] as Vector2)
+
+func _handle_touch_pressed(index: int, position: Vector2) -> void:
+	if not viewport_container.get_global_rect().has_point(position):
+		return
+	active_touches[index] = position
+	if active_touches.size() == 1 and not pinch_tap_blocked:
+		editing_tap = position
+		last_touch = position
+		pointer_moved = false
+		dragging = true
+	elif active_touches.size() >= 2:
+		# Both fingers inside the viewport. Suppress both orbit and tap selection
+		# until a subsequent entirely new single-finger gesture begins.
+		pinch_active = true
+		pinch_tap_blocked = true
+		pointer_moved = true
+		dragging = false
+		pinch_previous_distance = _pinch_distance()
+
+func _handle_touch_dragged(index: int, position: Vector2) -> void:
+	if not active_touches.has(index):
+		return
+	active_touches[index] = position
+	if active_touches.size() >= 2:
+		var spacing := _pinch_distance()
+		if not pinch_active:
+			pinch_active = true
+			pinch_previous_distance = spacing
+			pinch_tap_blocked = true
+			pointer_moved = true
+		elif spacing >= PINCH_MIN_SPACING and pinch_previous_distance >= PINCH_MIN_SPACING:
+			# Distance ratio is resolution-independent and independent of frame rate.
+			# When fingers spread, camera approaches the target.
+			_zoom_by_ratio(pow(pinch_previous_distance / spacing, PINCH_ZOOM_SPEED))
+		pinch_previous_distance = spacing
+		return
+	if not dragging:
+		# Allow the remaining finger to orbit after a pinch without selecting.
+		dragging = true
+		editing_tap = position
+		last_touch = position
+		pointer_moved = true
+	if position.distance_to(editing_tap) > 12.0:
+		pointer_moved = true
+	if pointer_moved:
+		var delta: Vector2 = position - last_touch
+		orbit_yaw -= delta.x * 0.008
+		orbit_pitch = clampf(orbit_pitch + delta.y * 0.008, -1.25, 1.25)
+		_update_camera()
+	last_touch = position
+
+func _handle_touch_released(index: int, position: Vector2) -> void:
+	if not active_touches.has(index):
+		return
+	var select_on_release := active_touches.size() == 1 and dragging and not pointer_moved and not pinch_tap_blocked
+	active_touches.erase(index)
+	if active_touches.size() == 1:
+		# Keep the remaining finger usable, but never pick on its eventual release.
+		var pointer: int = int(active_touches.keys()[0])
+		last_touch = active_touches[pointer]
+		editing_tap = last_touch
+		dragging = true
+		pointer_moved = true
+		pinch_active = false
+		pinch_previous_distance = 0.0
+	elif active_touches.is_empty():
+		_clear_touch_gesture()
+	if select_on_release:
+		_pick_object(position)
+
 func _input(event: InputEvent) -> void:
 	if workspace_layer == null or not workspace_layer.visible:
-		dragging = false
+		_clear_touch_gesture()
 		return
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			dragging = viewport_container.get_global_rect().has_point(event.position)
-			editing_tap = event.position
-			pointer_moved = false
+			_handle_touch_pressed(event.index, event.position)
 		else:
-			if dragging and not pointer_moved:
-				_pick_object(event.position)
-			dragging = false
-		last_touch = event.position
-	elif event is InputEventScreenDrag and dragging:
-		if event.position.distance_to(editing_tap) > 12.0:
-			pointer_moved = true
-		if pointer_moved:
-			orbit_yaw -= event.relative.x * 0.008
-			orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
-			_update_camera()
+			_handle_touch_released(event.index, event.position)
+	elif event is InputEventScreenDrag:
+		_handle_touch_dragged(event.index, event.position)
 	elif event is InputEventMouseButton:
+		# Ignore mouse events synthesized by ongoing touchscreen gestures.
+		if not active_touches.is_empty():
+			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				dragging = viewport_container.get_global_rect().has_point(event.position)
 				editing_tap = event.position
+				last_touch = event.position
 				pointer_moved = false
 			else:
 				if dragging and not pointer_moved:
 					_pick_object(event.position)
 				dragging = false
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			orbit_distance = maxf(2.0, orbit_distance - 0.7)
-			_update_camera()
+			_zoom_by_ratio(0.85)
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			orbit_distance = minf(25.0, orbit_distance + 0.7)
-			_update_camera()
-	elif event is InputEventMouseMotion and dragging:
+			_zoom_by_ratio(1.18)
+	elif event is InputEventMouseMotion and dragging and active_touches.is_empty():
 		if event.position.distance_to(editing_tap) > 12.0:
 			pointer_moved = true
 		if pointer_moved:
 			orbit_yaw -= event.relative.x * 0.008
 			orbit_pitch = clampf(orbit_pitch + event.relative.y * 0.008, -1.25, 1.25)
 			_update_camera()
+
 
 func _pick_object(screen_position: Vector2) -> void:
 	if mesh_mode != "Object":
@@ -1422,6 +1515,7 @@ func _resize_menu_content(available: Vector2) -> void:
 	menu_box.add_theme_constant_override("separation", clampi(int(available.y * 0.025), 4, 16))
 
 func _leave_workspace() -> void:
+	_clear_touch_gesture()
 	_cancel()
 	workspace_layer.visible = false
 	menu_layer.visible = true

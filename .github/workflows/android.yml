@@ -95,6 +95,8 @@ jobs:
         run: godot --headless --path . --script res://tests/v05_mesh_edit.gd
       - name: Dabsky AI offline assistant integration tests
         run: godot --headless --path . --script res://tests/v06_ai_commands.gd
+      - name: Test Android two-finger pinch-to-zoom and orbit gestures
+        run: godot --headless --path . --script res://tests/v061_touch_camera.gd
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}
@@ -161,6 +163,26 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Dabsky 3D — Latest Signed APK" --notes "Automatically published, verified Android APK. Updates use Dabsky's existing permanent signing key."
           fi
           gh release upload "$TAG" "build/dabsky-3d.apk#dabsky-3d.apk" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Export x86_64 debug APK for Android emulator testing
+        run: |
+          cp export_presets.cfg "$RUNNER_TEMP/export_release_preset.cfg"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("export_presets.cfg")
+          s = p.read_text()
+          s = s.replace('architectures/arm64-v8a=true', 'architectures/arm64-v8a=false')
+          s += '\narchitectures/x86_64=true\n'
+          p.write_text(s)
+          PY
+          godot --headless --path . --export-debug Android build/dabsky-3d-emulator.apk
+          test -s build/dabsky-3d-emulator.apk
+          mv "$RUNNER_TEMP/export_release_preset.cfg" export_presets.cfg
+      - name: Upload emulator APK for device smoke test
+        uses: actions/upload-artifact@v4
+        with:
+          name: dabsky-3d-emulator-apk
+          path: build/dabsky-3d-emulator.apk
+          if-no-files-found: error
       - name: Report build result
         if: always()
         env:
@@ -175,3 +197,50 @@ jobs:
             MSG="APK build failed: $RUN_URL — export: $EXPORT_OUTCOME; artifact upload: $UPLOAD_OUTCOME. Commit: $GITHUB_SHA"
           fi
           gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "$MSG"
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Enable KVM acceleration
+        run: |
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Download Android x86_64 test APK
+        uses: actions/download-artifact@v4
+        with:
+          name: dabsky-3d-emulator-apk
+          path: emulator-build
+      - name: Run Android emulator and launch Dabsky
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none
+          script: |
+            adb install -r emulator-build/dabsky-3d-emulator.apk
+            adb shell am force-stop com.dabsky.studio3d || true
+            adb shell monkey -p com.dabsky.studio3d -c android.intent.category.LAUNCHER 1
+            sleep 18
+            adb shell pidof com.dabsky.studio3d
+            mkdir -p emulator-build/diagnostics
+            adb logcat -d -v time > emulator-build/diagnostics/logcat.txt
+            if grep -E -i "FATAL EXCEPTION.*|Process: com\.dabsky\.studio3d|SCRIPT ERROR:|ERROR: .*Failed to load" emulator-build/diagnostics/logcat.txt; then
+              echo "::error::Android emulator reported a Godot or process crash"
+              exit 1
+            fi
+            adb shell screencap -p /sdcard/dabsky-studio-emulator.png
+            adb pull /sdcard/dabsky-studio-emulator.png emulator-build/diagnostics/screenshot.png
+            echo "DABSKY ANDROID EMULATOR LAUNCH PASSED"
+      - name: Upload emulator screenshot and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dabsky-android-emulator-diagnostics
+          path: emulator-build/diagnostics/
+          if-no-files-found: warn
