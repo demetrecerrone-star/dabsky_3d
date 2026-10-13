@@ -164,7 +164,7 @@ func get_report() -> String:
 	if not _viewport_problem() and not performance_warning:
 		report += "No current in-app performance/viewport warning (not a shader validation).\n"
 	if not warning_history.is_empty():
-		report += "Recent symptoms: " + " | ".join(warning_history) + "\n"
+		report += "Recent symptoms: " + " | ".join(PackedStringArray(warning_history)) + "\n"
 	report += "Native Android shader errors and GPU driver logs cannot be read here.\n"
 	report += "If geometry is blank or flickers, capture a screenshot and Android logcat for investigation."
 	return report
