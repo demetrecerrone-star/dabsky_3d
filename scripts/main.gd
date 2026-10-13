@@ -52,6 +52,7 @@ const OBJECT_LIMIT := 100
 var orbit_yaw := 0.55
 var orbit_pitch := 0.35
 var orbit_distance := 8.0
+var orbit_target := Vector3.ZERO
 var camera: Camera3D
 var menu_layer: Control
 var workspace_layer: MarginContainer
@@ -70,12 +71,15 @@ var dragging := false
 var last_touch := Vector2.ZERO
 var active_touches: Dictionary = {}
 var pinch_previous_distance := 0.0
+var pinch_previous_center := Vector2.ZERO
 var pinch_active := false
 var pinch_tap_blocked := false
 const CAMERA_MIN_DISTANCE := 0.65
 const CAMERA_MAX_DISTANCE := 80.0
 const PINCH_MIN_SPACING := 12.0
 const PINCH_ZOOM_SPEED := 1.0
+const VERTEX_TOUCH_RADIUS_PX := 34.0
+const FACE_TOUCH_RADIUS_PX := 16.0
 const TOOLBAR_SCROLL_DEADZONE := 18
 var touch_scroll_toolbars: Array[ScrollContainer] = []
 var toolbar_touch_start: Dictionary = {}
@@ -169,6 +173,7 @@ func _ready() -> void:
 	_add_button(editbar, "Undo", _undo)
 	_add_button(editbar, "Redo", _redo)
 	_add_button(editbar, "Reset View", _reset_view)
+	_add_button(editbar, "Fit Model", _fit_model_to_view)
 	_add_button(editbar, "Zoom +", func(): _zoom_by_ratio(0.8))
 	_add_button(editbar, "Zoom -", func(): _zoom_by_ratio(1.25))
 	_add_button(editbar, "Fit -", func(): _adjust_screen_fit(-SCREEN_FIT_STEP))
@@ -197,7 +202,7 @@ func _ready() -> void:
 	_add_button(command_row, "Apply", _apply)
 	_add_button(command_row, "Cancel", _cancel)
 	status = Label.new()
-	status.text = "Tap to select • one finger to orbit • pinch with two fingers to zoom • Zoom +/- also available."
+	status.text = "Tap to select • drag to orbit • two fingers to pan or pinch zoom • Fit Model centers selection."
 	status.add_theme_font_size_override("font_size", 16)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.max_lines_visible = 2
@@ -1089,14 +1094,60 @@ func _add_grid() -> void:
 func _update_camera() -> void:
 	if camera == null:
 		return
-	camera.position = Vector3(sin(orbit_yaw) * cos(orbit_pitch), sin(orbit_pitch), cos(orbit_yaw) * cos(orbit_pitch)) * orbit_distance
-	camera.look_at(Vector3.ZERO)
+	camera.position = orbit_target + Vector3(sin(orbit_yaw) * cos(orbit_pitch), sin(orbit_pitch), cos(orbit_yaw) * cos(orbit_pitch)) * orbit_distance
+	camera.look_at(orbit_target)
 
 func _reset_view() -> void:
 	_clear_touch_gesture()
 	orbit_yaw = 0.55
 	orbit_pitch = 0.35
 	orbit_distance = 8.0
+	orbit_target = Vector3.ZERO
+	_update_camera()
+
+func _fit_model_to_view() -> void:
+	# Frame the selected object, or all model objects if nothing is selected.
+	# Only camera values change, never model transforms.
+	var targets: Array[MeshInstance3D] = []
+	if selected != null and is_instance_valid(selected) and selected.mesh != null:
+		targets.append(selected)
+	else:
+		for obj in objects:
+			if is_instance_valid(obj) and obj.mesh != null and obj.visible:
+				targets.append(obj)
+	if targets.is_empty():
+		status.text = "Add or import a model to frame."
+		return
+	var minimum := Vector3(INF, INF, INF)
+	var maximum := Vector3(-INF, -INF, -INF)
+	for obj in targets:
+		var box := obj.get_aabb()
+		for corner in range(8):
+			var point: Vector3 = obj.global_transform * box.get_endpoint(corner)
+			minimum = minimum.min(point)
+			maximum = maximum.max(point)
+	var center := (minimum + maximum) * 0.5
+	var radius := maxf((maximum - center).length(), 0.15)
+	var rect := viewport_container.get_global_rect()
+	var aspect := maxf(rect.size.x, 1.0) / maxf(rect.size.y, 1.0)
+	var vertical_half_angle := deg_to_rad(camera.fov) * 0.5
+	var horizontal_half_angle := atan(tan(vertical_half_angle) * aspect)
+	var limiting_angle := minf(vertical_half_angle, horizontal_half_angle)
+	_clear_touch_gesture()
+	orbit_target = center
+	orbit_distance = clampf(radius / sin(limiting_angle) * 1.25, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE)
+	_update_camera()
+	status.text = "Framed %s. Drag to orbit, use two fingers to pan or zoom." % (selected.name if targets.size() == 1 and selected != null else "all models")
+
+func _pan_by_screen_delta(delta: Vector2) -> void:
+	var height := viewport_container.get_global_rect().size.y
+	if height <= 0.0 or delta.length_squared() <= 0.0:
+		return
+	# Convert a pixel drag to camera-space movement at the orbit target depth.
+	# The scene follows the average motion of both fingers, without moving meshes.
+	var units_per_pixel := 2.0 * orbit_distance * tan(deg_to_rad(camera.fov) * 0.5) / height
+	var basis := camera.global_transform.basis
+	orbit_target += (-basis.x * delta.x + basis.y * delta.y) * units_per_pixel
 	_update_camera()
 
 func _zoom_by_ratio(ratio: float) -> void:
@@ -1109,6 +1160,7 @@ func _zoom_by_ratio(ratio: float) -> void:
 func _clear_touch_gesture() -> void:
 	active_touches.clear()
 	pinch_previous_distance = 0.0
+	pinch_previous_center = Vector2.ZERO
 	pinch_active = false
 	pinch_tap_blocked = false
 	dragging = false
@@ -1118,6 +1170,12 @@ func _pinch_distance() -> float:
 		return 0.0
 	var pointers: Array = active_touches.keys()
 	return (active_touches[pointers[0]] as Vector2).distance_to(active_touches[pointers[1]] as Vector2)
+
+func _pinch_center() -> Vector2:
+	if active_touches.size() < 2:
+		return Vector2.ZERO
+	var pointers: Array = active_touches.keys()
+	return ((active_touches[pointers[0]] as Vector2) + (active_touches[pointers[1]] as Vector2)) * 0.5
 
 func _handle_touch_pressed(index: int, position: Vector2) -> void:
 	if not viewport_container.get_global_rect().has_point(position):
@@ -1136,6 +1194,7 @@ func _handle_touch_pressed(index: int, position: Vector2) -> void:
 		pointer_moved = true
 		dragging = false
 		pinch_previous_distance = _pinch_distance()
+		pinch_previous_center = _pinch_center()
 
 func _handle_touch_dragged(index: int, position: Vector2) -> void:
 	if not active_touches.has(index):
@@ -1143,16 +1202,20 @@ func _handle_touch_dragged(index: int, position: Vector2) -> void:
 	active_touches[index] = position
 	if active_touches.size() >= 2:
 		var spacing := _pinch_distance()
+		var center := _pinch_center()
 		if not pinch_active:
 			pinch_active = true
 			pinch_previous_distance = spacing
+			pinch_previous_center = center
 			pinch_tap_blocked = true
 			pointer_moved = true
-		elif spacing >= PINCH_MIN_SPACING and pinch_previous_distance >= PINCH_MIN_SPACING:
-			# Distance ratio is resolution-independent and independent of frame rate.
-			# When fingers spread, camera approaches the target.
-			_zoom_by_ratio(pow(pinch_previous_distance / spacing, PINCH_ZOOM_SPEED))
+		else:
+			_pan_by_screen_delta(center - pinch_previous_center)
+			if spacing >= PINCH_MIN_SPACING and pinch_previous_distance >= PINCH_MIN_SPACING:
+				# Moving fingers apart zooms in; translating both pans the view.
+				_zoom_by_ratio(pow(pinch_previous_distance / spacing, PINCH_ZOOM_SPEED))
 		pinch_previous_distance = spacing
+		pinch_previous_center = center
 		return
 	if not dragging:
 		# Allow the remaining finger to orbit after a pinch without selecting.
@@ -1183,6 +1246,7 @@ func _handle_touch_released(index: int, position: Vector2) -> void:
 		pointer_moved = true
 		pinch_active = false
 		pinch_previous_distance = 0.0
+		pinch_previous_center = Vector2.ZERO
 	elif active_touches.is_empty():
 		_clear_touch_gesture()
 	if select_on_release:
@@ -1282,9 +1346,9 @@ func _set_mesh_mode(mode: String) -> void:
 	if mode == "Object":
 		status.text = "Object mode. Tap meshes to select, drag to orbit."
 	elif mode == "Face":
-		status.text = "Face mode: tap a triangle to select it, then Extrude or Inset."
+		status.text = "Face mode: tap near a triangle to select, then Extrude or Inset."
 	else:
-		status.text = "Vertex mode: tap a corner, then use V X/Y/Z + or -."
+		status.text = "Vertex mode: tap near a corner, then use V X/Y/Z + or -."
 
 func _pick_mesh_component(screen_position: Vector2) -> void:
 	if selected == null or selected.mesh == null:
@@ -1299,11 +1363,35 @@ func _pick_mesh_component(screen_position: Vector2) -> void:
 	var ray_start := inverse * ray_origin
 	var ray_dir := (inverse.basis * ray_direction).normalized()
 	var result: Dictionary = MeshEdit.ray_pick_face(selected.mesh, ray_start, ray_dir)
+	# In vertex mode a finger may land beside a tiny corner, not on its face.
+	# Snap to the nearest projected vertex within a finger-sized screen radius.
+	if mesh_mode == "Vertex":
+		var vertex_result := _nearest_touch_vertex(screen_position)
+		if not vertex_result.is_empty():
+			picked_surface = int(vertex_result["surface"])
+			picked_face = int(vertex_result["face"])
+			picked_vertex = vertex_result["vertex"]
+			has_picked_vertex = true
+			status.text = "Vertex selected. Use V X/Y/Z +/- to edit."
+			_refresh_mesh_visual()
+			return
+	# Give face selection a small, deterministic tolerance for fat-finger taps.
+	if result.is_empty():
+		for offset in [Vector2(-FACE_TOUCH_RADIUS_PX, 0), Vector2(FACE_TOUCH_RADIUS_PX, 0), Vector2(0, -FACE_TOUCH_RADIUS_PX), Vector2(0, FACE_TOUCH_RADIUS_PX), Vector2(-11, -11), Vector2(11, -11), Vector2(-11, 11), Vector2(11, 11)]:
+			var probe: Vector2 = screen_position + offset
+			if not rect.has_point(probe):
+				continue
+			var screen_probe: Vector2 = (probe - rect.position) * Vector2(viewport.size) / rect.size
+			var local_origin: Vector3 = inverse * camera.project_ray_origin(screen_probe)
+			var local_direction: Vector3 = (inverse.basis * camera.project_ray_normal(screen_probe)).normalized()
+			result = MeshEdit.ray_pick_face(selected.mesh, local_origin, local_direction)
+			if not result.is_empty():
+				break
 	var best_surface: int = int(result.get("surface", -1))
 	var best_face: int = int(result.get("face", -1))
 	var best_point: Vector3 = result.get("point", Vector3.ZERO)
 	if best_face < 0:
-		status.text = "Tap directly on the selected mesh."
+		status.text = "Tap near a visible corner or face of the selected mesh."
 		return
 	picked_surface = best_surface
 	picked_face = best_face
@@ -1322,6 +1410,29 @@ func _pick_mesh_component(screen_position: Vector2) -> void:
 		status.text = "Triangle %d selected. Extrude or Inset." % (picked_face + 1)
 	_refresh_mesh_visual()
 
+func _nearest_touch_vertex(screen_position: Vector2) -> Dictionary:
+	if selected == null or selected.mesh == null:
+		return {}
+	var rect := viewport_container.get_global_rect()
+	var nearest_squared := VERTEX_TOUCH_RADIUS_PX * VERTEX_TOUCH_RADIUS_PX
+	var best := {}
+	for surface in range(selected.mesh.get_surface_count()):
+		var data: Dictionary = MeshEdit._surface_data(selected.mesh, surface)
+		if data.is_empty():
+			continue
+		var positions: PackedVector3Array = data["positions"]
+		for index in range(positions.size()):
+			var vertex: Vector3 = positions[index]
+			var world: Vector3 = selected.global_transform * vertex
+			if camera.is_position_behind(world):
+				continue
+			var projected := rect.position + camera.unproject_position(world) * rect.size / Vector2(viewport.size)
+			var distance_squared := projected.distance_squared_to(screen_position)
+			if distance_squared < nearest_squared:
+				nearest_squared = distance_squared
+				best = {"surface": surface, "face": int(index / 3), "vertex": vertex}
+	return best
+
 func _refresh_mesh_visual() -> void:
 	if mesh_visual != null and is_instance_valid(mesh_visual):
 		mesh_visual.queue_free()
@@ -1334,8 +1445,8 @@ func _refresh_mesh_visual() -> void:
 	mesh_visual = MeshInstance3D.new()
 	if mesh_mode == "Vertex" and has_picked_vertex:
 		var marker := SphereMesh.new()
-		marker.radius = 0.10
-		marker.height = 0.20
+		marker.radius = clampf(orbit_distance * 0.02, 0.10, 0.4)
+		marker.height = marker.radius * 2.0
 		mesh_visual.mesh = marker
 		mesh_visual.position = picked_vertex
 		mesh_visual.material_override = mesh_highlight_material
