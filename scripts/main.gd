@@ -76,6 +76,11 @@ const CAMERA_MIN_DISTANCE := 0.65
 const CAMERA_MAX_DISTANCE := 80.0
 const PINCH_MIN_SPACING := 12.0
 const PINCH_ZOOM_SPEED := 1.0
+const TOOLBAR_SCROLL_DEADZONE := 18
+var touch_scroll_toolbars: Array[ScrollContainer] = []
+var toolbar_touch_start: Dictionary = {}
+var toolbar_touch_dragged: Dictionary = {}
+var toolbar_swipe_blocked := false
 
 func _ready() -> void:
 	get_viewport().gui_embed_subwindows = true
@@ -388,7 +393,11 @@ func _add_button(parent: Control, label: String, callback: Callable) -> void:
 	button.text = label
 	button.custom_minimum_size = Vector2(90, 48)
 	button.add_theme_font_size_override("font_size", 16)
-	button.pressed.connect(callback)
+	if parent.get_parent() is ScrollContainer:
+		button.mouse_filter = Control.MOUSE_FILTER_PASS
+		button.pressed.connect(_run_toolbar_action.bind(callback))
+	else:
+		button.pressed.connect(callback)
 	parent.add_child(button)
 
 func _build_glb_dialogs() -> void:
@@ -630,9 +639,40 @@ func _add_scrolling_toolbar(parent: VBoxContainer, contents: HBoxContainer) -> v
 	scroll.custom_minimum_size.y = 53
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# Native touch scrolling distinguishes a swipe from a tap using this deadzone.
+	scroll.scroll_deadzone = TOOLBAR_SCROLL_DEADZONE
 	parent.add_child(scroll)
+	# Let drag events bubble through the row into ScrollContainer.
+	contents.mouse_filter = Control.MOUSE_FILTER_PASS
 	contents.add_theme_constant_override("separation", 7)
 	scroll.add_child(contents)
+	touch_scroll_toolbars.append(scroll)
+
+func _track_toolbar_touch(event: InputEvent) -> void:
+	# ScrollContainer handles movement natively. Only guard against actions
+	# from buttons whose finger gestures became swipes.
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			for scroll in touch_scroll_toolbars:
+				if scroll.is_visible_in_tree() and scroll.get_global_rect().has_point(event.position):
+					toolbar_touch_start[event.index] = event.position
+					toolbar_touch_dragged.erase(event.index)
+					toolbar_swipe_blocked = false
+					break
+		elif toolbar_touch_start.has(event.index):
+			if bool(toolbar_touch_dragged.get(event.index, false)):
+				toolbar_swipe_blocked = true
+			toolbar_touch_start.erase(event.index)
+			toolbar_touch_dragged.erase(event.index)
+	elif event is InputEventScreenDrag and toolbar_touch_start.has(event.index):
+		var start: Vector2 = toolbar_touch_start[event.index]
+		if start.distance_to(event.position) >= TOOLBAR_SCROLL_DEADZONE:
+			toolbar_touch_dragged[event.index] = true
+			toolbar_swipe_blocked = true
+
+func _run_toolbar_action(callback: Callable) -> void:
+	if not toolbar_swipe_blocked:
+		callback.call()
 
 func _make_mesh(kind: String) -> Mesh:
 	match kind:
@@ -1151,7 +1191,10 @@ func _handle_touch_released(index: int, position: Vector2) -> void:
 func _input(event: InputEvent) -> void:
 	if workspace_layer == null or not workspace_layer.visible:
 		_clear_touch_gesture()
+		toolbar_touch_start.clear()
+		toolbar_touch_dragged.clear()
 		return
+	_track_toolbar_touch(event)
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			_handle_touch_pressed(event.index, event.position)
