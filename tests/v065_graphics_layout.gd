@@ -39,9 +39,12 @@ func _verify() -> void:
 	if fps_label.text != "FPS 120":
 		_fail("Always-visible FPS label failed to update")
 		return
-	var subview: SubViewport = editor.get("viewport")
-	var original := subview.size
-	subview.size = Vector2i(1461, 78)
+	# Godot forbids directly resizing a SubViewport when its parent stretches it.
+	# Substitute an independent viewport to reproduce the real phone's dimensions.
+	var original: SubViewport = graphics.get("scene_viewport")
+	var simulated := SubViewport.new()
+	simulated.size = Vector2i(1461, 78)
+	graphics.set("scene_viewport", simulated)
 	graphics.call("refresh_report")
 	if button.text != "Graphics !":
 		_fail("Thin 1461 by 78 viewport should trigger Graphics warning")
@@ -49,7 +52,7 @@ func _verify() -> void:
 	if not (graphics.call("get_report") as String).contains("OBSERVED WARNING"):
 		_fail("Collapsed viewport was not included in copyable report")
 		return
-	subview.size = original
+	graphics.set("scene_viewport", original)
 	graphics.call("refresh_report")
 	print("DABSKY RESPONSIVE GRAPHICS OVERLAY / VIEWPORT SIZE / LIVE FPS PASSED")
 	quit(0)
