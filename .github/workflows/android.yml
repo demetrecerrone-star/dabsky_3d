@@ -101,6 +101,8 @@ jobs:
         run: godot --headless --path . --script res://tests/v062_toolbar_scroll.gd
       - name: Test touch panning, Fit Model and tolerant vertex picks
         run: godot --headless --path . --script res://tests/v063_viewport_ux.gd
+      - name: Test graphics diagnostics warning report and recovery
+        run: godot --headless --path . --script res://tests/v064_graphics_diagnostics.gd
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}
