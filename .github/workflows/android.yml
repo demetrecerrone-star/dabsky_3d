@@ -230,10 +230,7 @@ jobs:
             adb shell pidof com.dabsky.studio3d
             mkdir -p emulator-build/diagnostics
             adb logcat -d -v time > emulator-build/diagnostics/logcat.txt
-            if grep -E -i "FATAL EXCEPTION.*|Process: com\.dabsky\.studio3d|SCRIPT ERROR:|ERROR: .*Failed to load" emulator-build/diagnostics/logcat.txt; then
-              echo "::error::Android emulator reported a Godot or process crash"
-              exit 1
-            fi
+            if grep -E -i "FATAL EXCEPTION|SCRIPT ERROR:|ERROR: .*Failed to load|Fatal signal" emulator-build/diagnostics/logcat.txt; then echo "::error::Android emulator reported a Godot or process crash"; exit 1; fi
             adb shell screencap -p /sdcard/dabsky-studio-emulator.png
             adb pull /sdcard/dabsky-studio-emulator.png emulator-build/diagnostics/screenshot.png
             echo "DABSKY ANDROID EMULATOR LAUNCH PASSED"
