@@ -1,0 +1,79 @@
+openapi: 3.0.3
+info:
+  title: Dabsky Connect
+  version: 0.1.0
+  description: Authenticated procedural GLB job prototype; not a learned text-to-mesh model.
+servers:
+  - url: https://us-central1-dabsky-3d.cloudfunctions.net/dabskyApi
+    description: Expected deployment URL; must be verified after deployment.
+paths:
+  /health:
+    get:
+      summary: Check backend health
+      responses:
+        '200':
+          description: Healthy backend
+  /v1/catalog:
+    get:
+      summary: List supported procedural model types
+      responses:
+        '200':
+          description: Model catalog
+  /v1/jobs:
+    post:
+      summary: Create a procedural 3D model job
+      security:
+        - FirebaseBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              additionalProperties: false
+              properties:
+                prompt: { type: string, minLength: 1, maxLength: 180 }
+      responses:
+        '201': { description: Generated job available }
+        '400': { description: Unsupported prompt }
+        '401': { description: Missing or invalid Firebase ID token }
+        '429': { description: Daily quota exceeded }
+  /v1/jobs/{id}:
+    get:
+      summary: Inspect job status for its owner
+      security:
+        - FirebaseBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Owner job metadata }
+        '401': { description: Authentication required }
+        '404': { description: Job unavailable to this user }
+  /v1/jobs/{id}/model:
+    get:
+      summary: Download job GLB as its owner
+      security:
+        - FirebaseBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Binary GLB
+          content:
+            model/gltf-binary:
+              schema: { type: string, format: binary }
+        '401': { description: Authentication required }
+        '404': { description: Job unavailable to this user }
+components:
+  securitySchemes:
+    FirebaseBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: Firebase ID token
