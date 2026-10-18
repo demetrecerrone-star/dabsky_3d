@@ -14,7 +14,6 @@ RUN git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git . \
     && python3.10 -m pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
        --index-url https://download.pytorch.org/whl/cu124 \
     && python3.10 -m pip install -r requirements.txt \
-    && python3.10 -m pip install -e .
 
 WORKDIR /app
 COPY requirements.txt .
