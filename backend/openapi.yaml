@@ -64,6 +64,22 @@ paths:
         '401': { description: Authentication required }
         '404': { description: Job unavailable to this user }
         '502': { description: Neural worker unavailable }
+  /v1/jobs/{id}/cancel:
+    post:
+      summary: Cancel an active generation job
+      security:
+        - FirebaseBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Cancellation accepted or job already terminal }
+        '401': { description: Authentication required }
+        '404': { description: Job unavailable to this user }
+        '409': { description: Job is already local or not cancellable }
+        '502': { description: Neural worker cancellation failed }
   /v1/jobs/{id}/model:
     get:
       summary: Download job GLB as its owner
