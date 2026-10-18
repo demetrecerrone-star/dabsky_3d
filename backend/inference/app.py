@@ -90,9 +90,10 @@ def _export_glb(mesh: Any, output_path: Path) -> None:
 
 
 def _run_generation(job_id: str, prompt: str, reference: dict[str, Any]) -> None:
-    reference_path = _write_reference(job_id, reference)
+    reference_path: Path | None = None
     output_path = RESULT_ROOT / job_id / "model.glb"
     try:
+        reference_path = _write_reference(job_id, reference)
         _set_job(job_id, status="running", progress=8, message="Loading Dabsky AI model…")
         _set_job(job_id, progress=20, message="Reconstructing 3D shape…")
         mesh = runtime.generate_shape(reference_path)
@@ -104,10 +105,11 @@ def _run_generation(job_id: str, prompt: str, reference: dict[str, Any]) -> None
     except Exception as exc:
         _set_job(job_id, status="failed", message=f"Generation failed: {exc}")
     finally:
-        try:
-            reference_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if reference_path is not None:
+            try:
+                reference_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @app.get("/health")
