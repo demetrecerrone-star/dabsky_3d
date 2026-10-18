@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feature/dabsky-connect-firebase
+      - codex/dabsky-v0.8-remote-generation
     paths:
       - "backend/**"
       - "firebase.json"
