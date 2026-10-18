@@ -4,10 +4,17 @@ This is the first real neural-generation worker for Dabsky. It wraps the officia
 Hunyuan3D-2.1 shape pipeline behind Dabsky's job API, so the Android app receives
 an asynchronous, editable GLB instead of a procedural recipe.
 
-The first stage is intentionally image-to-3D. Hunyuan3D-2.1's official pipeline
-accepts a reference image and returns a mesh; prompt-only generation will use a
-Dabsky text-to-image conditioning stage in a later milestone. The Android app
-continues to use its offline generator when no reference image is available.
+The worker supports two prompt paths:
+
+- **Reference image + prompt:** sent directly to Hunyuan3D-2.1.
+- **Prompt only:** sent to a private text-to-image conditioner when
+  `DABSKY_TEXT_TO_IMAGE_URL` is configured, then passed through the same
+  Hunyuan3D shape pipeline.
+
+The conditioner is intentionally an HTTP adapter, so Dabsky can use a local
+text-to-image model or a private hosted model without putting its weights or
+credentials in the APK. It must accept `POST {"prompt":"..."}` and return either
+an image response or JSON with `image_base64` (optionally `mime_type`).
 
 ## Hardware
 
@@ -25,11 +32,17 @@ docker build -t dabsky-ai-worker backend/inference
 docker run --gpus all --rm -p 8080:8080 \
   -e DABSKY_WORKER_TOKEN='use-a-secret-token' \
   -e DABSKY_HUNYUAN_LICENSE_ACK='I_HAVE_REVIEWED_LICENSE' \
+  -e DABSKY_TEXT_TO_IMAGE_URL='http://text-image-service:9000/generate' \
+  -e DABSKY_TEXT_TO_IMAGE_TOKEN='text-image-secret' \
   dabsky-ai-worker
 ```
 
 Configure Dabsky's Remote AI API field to the worker URL. If a token is set,
 put the same bearer token in the app's optional token field.
+
+Without `DABSKY_TEXT_TO_IMAGE_URL`, reference-image generation still works and
+prompt-only requests return a clear configuration error. The Android app keeps
+its offline prompt generator as the local fallback.
 
 ## Important licensing gate
 
