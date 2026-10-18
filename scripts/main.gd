@@ -3,6 +3,8 @@ extends Control
 const GlbIO = preload("res://scripts/glb_io.gd")
 const MeshEdit = preload("res://scripts/mesh_edit.gd")
 const DabskyAI = preload("res://scripts/dabsky_ai.gd")
+const DabskyGenerator = preload("res://scripts/dabsky_generator.gd")
+const DabskyRemote = preload("res://scripts/dabsky_remote.gd")
 const GraphicsDiagnostics = preload("res://scripts/graphics_diagnostics.gd")
 var ai_panel: VBoxContainer
 var ai_prompt: LineEdit
@@ -96,6 +98,28 @@ var create_tools: ScrollContainer
 var project_tools: ScrollContainer
 var transform_tools: ScrollContainer
 var workspace_entered_once := false
+
+const REMOTE_API_DEFAULT := "https://us-central1-dabsky-3d.cloudfunctions.net/dabskyApi"
+const REMOTE_JOB_TIMEOUT_SECONDS := 900.0
+var remote_endpoint: LineEdit
+var remote_token: LineEdit
+var remote_reference_label: Label
+var remote_status_label: Label
+var remote_progress: ProgressBar
+var remote_generate_button: Button
+var remote_check_button: Button
+var remote_cancel_button: Button
+var remote_retry_button: Button
+var remote_reference_dialog: FileDialog
+var remote_request: HTTPRequest
+var remote_poll_timer: Timer
+var remote_reference_path := ""
+var remote_job_id := ""
+var remote_model_path := ""
+var remote_request_kind := ""
+var remote_state := "idle"
+var remote_elapsed := 0.0
+var remote_retry_payload: Dictionary = {}
 
 func _ready() -> void:
 	get_viewport().gui_embed_subwindows = true
@@ -280,7 +304,7 @@ func _build_ai_panel(parent: VBoxContainer) -> void:
 	var heading := HBoxContainer.new()
 	ai_panel.add_child(heading)
 	var title := Label.new()
-	title.text = "DABSKY AI • Offline modeling assistant"
+	title.text = "DABSKY AI • Modeling partner"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 17)
 	heading.add_child(title)
@@ -295,12 +319,86 @@ func _build_ai_panel(parent: VBoxContainer) -> void:
 	ai_panel.add_child(command_row)
 	ai_prompt = LineEdit.new()
 	ai_prompt.max_length = 500
-	ai_prompt.placeholder_text = "Try: create a cube and make it purple"
+	ai_prompt.placeholder_text = "Try a command, or describe an asset to generate"
+	ai_prompt.tooltip_text = "Examples: stylized red sword • low-poly pine tree • fantasy cottage"
 	ai_prompt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ai_prompt.text_submitted.connect(func(_text: String): _submit_ai())
 	command_row.add_child(ai_prompt)
 	_add_button(command_row, "Ask", _submit_ai)
+	_add_button(command_row, "Generate Model", _generate_from_prompt)
 	_add_button(command_row, "Examples", _ai_examples)
+	var remote_heading := Label.new()
+	remote_heading.text = "Remote AI • optional backend"
+	remote_heading.add_theme_font_size_override("font_size", 15)
+	ai_panel.add_child(remote_heading)
+	var remote_endpoint_row := HBoxContainer.new()
+	ai_panel.add_child(remote_endpoint_row)
+	var endpoint_caption := Label.new()
+	endpoint_caption.text = "API"
+	endpoint_caption.custom_minimum_size.x = 48
+	remote_endpoint_row.add_child(endpoint_caption)
+	remote_endpoint = LineEdit.new()
+	remote_endpoint.text = REMOTE_API_DEFAULT
+	remote_endpoint.placeholder_text = "https://your-dabsky-api.example"
+	remote_endpoint.tooltip_text = "Only use a backend you control or trust."
+	remote_endpoint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	remote_endpoint_row.add_child(remote_endpoint)
+	remote_check_button = Button.new()
+	remote_check_button.text = "Check"
+	remote_check_button.custom_minimum_size = Vector2(92, 48)
+	remote_check_button.pressed.connect(_check_remote_api)
+	remote_endpoint_row.add_child(remote_check_button)
+	var remote_auth_row := HBoxContainer.new()
+	ai_panel.add_child(remote_auth_row)
+	remote_token = LineEdit.new()
+	remote_token.placeholder_text = "Optional Firebase ID token (never saved)"
+	remote_token.secret = true
+	remote_token.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	remote_auth_row.add_child(remote_token)
+	var reference_button := Button.new()
+	reference_button.text = "Reference image"
+	reference_button.custom_minimum_size = Vector2(142, 48)
+	reference_button.pressed.connect(_open_remote_reference_dialog)
+	remote_auth_row.add_child(reference_button)
+	var reference_clear_button := Button.new()
+	reference_clear_button.text = "Clear"
+	reference_clear_button.custom_minimum_size = Vector2(82, 48)
+	reference_clear_button.pressed.connect(_clear_remote_reference)
+	remote_auth_row.add_child(reference_clear_button)
+	remote_reference_label = Label.new()
+	remote_reference_label.text = "No reference image selected."
+	remote_reference_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	remote_reference_label.max_lines_visible = 1
+	ai_panel.add_child(remote_reference_label)
+	var remote_actions := HBoxContainer.new()
+	ai_panel.add_child(remote_actions)
+	remote_generate_button = Button.new()
+	remote_generate_button.text = "Remote Generate"
+	remote_generate_button.custom_minimum_size = Vector2(156, 48)
+	remote_generate_button.pressed.connect(_remote_generate)
+	remote_actions.add_child(remote_generate_button)
+	remote_cancel_button = Button.new()
+	remote_cancel_button.text = "Cancel"
+	remote_cancel_button.custom_minimum_size = Vector2(92, 48)
+	remote_cancel_button.visible = false
+	remote_cancel_button.pressed.connect(_cancel_remote_generation)
+	remote_actions.add_child(remote_cancel_button)
+	remote_retry_button = Button.new()
+	remote_retry_button.text = "Retry"
+	remote_retry_button.custom_minimum_size = Vector2(92, 48)
+	remote_retry_button.visible = false
+	remote_retry_button.pressed.connect(_retry_remote_generation)
+	remote_actions.add_child(remote_retry_button)
+	remote_progress = ProgressBar.new()
+	remote_progress.custom_minimum_size.y = 18
+	remote_progress.visible = false
+	remote_progress.show_percentage = false
+	ai_panel.add_child(remote_progress)
+	remote_status_label = Label.new()
+	remote_status_label.text = "Remote adapter ready. Offline generation remains available."
+	remote_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	remote_status_label.max_lines_visible = 2
+	ai_panel.add_child(remote_status_label)
 	_ai_log("Dabsky AI", "Ready. I work offline with basic shapes, transforms, materials and project commands.")
 
 func _set_tool_category(category: String) -> void:
@@ -338,7 +436,7 @@ func _toggle_ai_panel() -> void:
 		status.text = "AI panel hidden. Modeling tools remain available."
 
 func _ai_examples() -> void:
-	_ai_log("Dabsky AI", DabskyAI.HELP)
+	_ai_log("Dabsky AI", DabskyAI.HELP + "\nGenerate Model examples: stylized red sword • low-poly pine tree • fantasy cottage • purple crystal.")
 
 func _ai_log(speaker: String, message: String) -> void:
 	ai_messages.append("%s: %s" % [speaker, message])
@@ -357,6 +455,301 @@ func _submit_ai() -> void:
 	var outcome: Dictionary = _run_ai_prompt(prompt)
 	_ai_log("Dabsky AI", str(outcome.get("message", "Unknown result.")))
 	status.text = str(outcome.get("message", "Unknown result.")).substr(0, 160)
+
+func _generate_from_prompt() -> void:
+	var prompt := ai_prompt.text.strip_edges()
+	if prompt.is_empty():
+		status.text = "Describe an asset first."
+		return
+	var result: Dictionary = DabskyGenerator.generate(prompt)
+	_ai_log("You", "Generate: " + prompt)
+	if not bool(result.get("ok", false)):
+		var failure := str(result.get("message", "Generation request rejected."))
+		_ai_log("Dabsky AI", failure)
+		status.text = failure
+		return
+	var parts: Array = result.get("parts", [])
+	if parts.is_empty():
+		status.text = "The generator returned no editable parts."
+		return
+	if objects.size() + parts.size() > OBJECT_LIMIT:
+		status.text = "Not enough scene space for this asset. Delete an object first."
+		return
+	_cancel()
+	_record_change()
+	var first_part: MeshInstance3D = null
+	for part_value in parts:
+		if not part_value is Dictionary:
+			continue
+		var part: Dictionary = part_value
+		var created: MeshInstance3D = _add_generated_part(part)
+		if first_part == null:
+			first_part = created
+	if first_part == null:
+		status.text = "The generator returned invalid parts."
+		return
+	_select_object(first_part)
+	call_deferred("_fit_model_to_view")
+	var message := str(result.get("message", "Model generated."))
+	_ai_log("Dabsky AI", message)
+	status.text = message
+
+func _remote_headers() -> PackedStringArray:
+	var headers := PackedStringArray(["Accept: application/json", "Content-Type: application/json"])
+	var token := remote_token.text.strip_edges() if remote_token != null else ""
+	if not token.is_empty():
+		headers.append("Authorization: Bearer " + token)
+	return headers
+
+func _remote_endpoint_url(path: String) -> String:
+	return DabskyRemote.join_url(remote_endpoint.text if remote_endpoint != null else "", path)
+
+func _remote_set_state(next_state: String, message: String = "") -> void:
+	remote_state = next_state
+	var busy := next_state in ["checking", "submitting", "polling", "downloading", "canceling"]
+	if remote_progress != null:
+		remote_progress.visible = busy
+		remote_progress.indeterminate = busy
+		if not busy:
+			remote_progress.value = 0.0
+	if remote_generate_button != null:
+		remote_generate_button.disabled = busy
+	if remote_check_button != null:
+		remote_check_button.disabled = busy
+	if remote_cancel_button != null:
+		remote_cancel_button.visible = busy
+	if remote_retry_button != null:
+		remote_retry_button.visible = next_state in ["error", "canceled"] and not remote_retry_payload.is_empty()
+	if not message.is_empty() and remote_status_label != null:
+		remote_status_label.text = message
+
+func _remote_apply_progress(parsed: Dictionary) -> void:
+	if remote_progress == null:
+		return
+	var progress := clampf(float(parsed.get("progress", 0.0)), 0.0, 100.0)
+	if progress > 0.0:
+		remote_progress.indeterminate = false
+		remote_progress.value = progress
+	else:
+		remote_progress.indeterminate = true
+
+func _remote_fail(message: String) -> void:
+	if remote_poll_timer != null:
+		remote_poll_timer.stop()
+	_remote_set_state("error", message)
+	_ai_log("Dabsky Remote", message)
+	status.text = message.substr(0, 160)
+
+func _check_remote_api() -> void:
+	if remote_endpoint == null or remote_endpoint.text.strip_edges().is_empty():
+		_remote_fail("Enter a remote API URL first.")
+		return
+	if not remote_endpoint.text.strip_edges().begins_with("http"):
+		_remote_fail("API URL must start with http:// or https://.")
+		return
+	if remote_request == null:
+		_remote_fail("Remote transport is not ready.")
+		return
+	if remote_state in ["checking", "submitting", "polling", "downloading"]:
+		return
+	_remote_set_state("checking", "Checking Dabsky API…")
+	remote_request_kind = "health"
+	var err := remote_request.request(_remote_endpoint_url("/health"), _remote_headers(), HTTPClient.METHOD_GET)
+	if err != OK:
+		_remote_fail("Could not start API check: " + error_string(err))
+
+func _remote_generate() -> void:
+	if remote_state in ["checking", "submitting", "polling", "downloading"]:
+		return
+	if remote_endpoint == null or remote_endpoint.text.strip_edges().is_empty():
+		_remote_fail("Enter a remote API URL first.")
+		return
+	if not remote_endpoint.text.strip_edges().begins_with("http"):
+		_remote_fail("API URL must start with http:// or https://.")
+		return
+	var prompt := ai_prompt.text.strip_edges()
+	if prompt.is_empty():
+		_remote_fail("Describe the asset before starting remote generation.")
+		return
+	var request_data := DabskyRemote.build_payload(prompt, remote_reference_path)
+	if not bool(request_data.get("ok", false)):
+		_remote_fail(str(request_data.get("message", "The request is invalid.")))
+		return
+	remote_retry_payload = request_data.get("payload", {})
+	remote_job_id = ""
+	remote_model_path = ""
+	remote_elapsed = 0.0
+	_remote_set_state("submitting", "Uploading prompt%s…" % (" and reference image" if not remote_reference_path.is_empty() else ""))
+	remote_request_kind = "create"
+	var err := remote_request.request(_remote_endpoint_url("/v1/jobs"), _remote_headers(), HTTPClient.METHOD_POST, JSON.stringify(remote_retry_payload))
+	if err != OK:
+		_remote_fail("Could not start remote generation: " + error_string(err))
+
+func _retry_remote_generation() -> void:
+	if remote_retry_payload.is_empty():
+		return
+	var prompt := str(remote_retry_payload.get("prompt", ""))
+	ai_prompt.text = prompt
+	_remote_generate()
+
+func _cancel_remote_generation() -> void:
+	if remote_poll_timer != null:
+		remote_poll_timer.stop()
+	if remote_state == "polling" and not remote_job_id.is_empty():
+		_remote_set_state("canceling", "Requesting remote cancellation…")
+		remote_request_kind = "cancel"
+		var err := remote_request.request(
+			_remote_endpoint_url("/v1/jobs/%s/cancel" % remote_job_id),
+			_remote_headers(),
+			HTTPClient.METHOD_POST
+		)
+		if err != OK:
+			_remote_set_state("canceled", "Canceled locally. The backend may finish its server job.")
+			status.text = "Remote generation canceled locally."
+		return
+	if remote_request != null:
+		remote_request.cancel_request()
+	remote_request_kind = ""
+	_remote_set_state("canceled", "Canceled locally. The backend may finish its server job.")
+	status.text = "Remote generation canceled locally."
+
+func _poll_remote_job() -> void:
+	if remote_state != "polling" or remote_job_id.is_empty():
+		return
+	remote_elapsed += 1.0
+	if remote_elapsed > REMOTE_JOB_TIMEOUT_SECONDS:
+		_remote_fail("Remote generation timed out. You can retry.")
+		return
+	remote_request_kind = "status"
+	var status_path := "/v1/jobs/%s" % remote_job_id
+	var err := remote_request.request(_remote_endpoint_url(status_path), _remote_headers(), HTTPClient.METHOD_GET)
+	if err != OK:
+		_remote_fail("Could not poll remote generation: " + error_string(err))
+
+func _schedule_remote_poll(delay: float = 1.0) -> void:
+	if remote_poll_timer == null:
+		return
+	remote_poll_timer.wait_time = clampf(delay, 0.5, 8.0)
+	remote_poll_timer.start()
+
+func _remote_start_model_download(model_path: String) -> void:
+	var path := model_path
+	if path.is_empty():
+		path = "/v1/jobs/%s/model" % remote_job_id
+	remote_model_path = path
+	_remote_set_state("downloading", "Generation complete. Downloading editable GLB…")
+	remote_request_kind = "model"
+	var err := remote_request.request(_remote_endpoint_url(path), _remote_headers(), HTTPClient.METHOD_GET)
+	if err != OK:
+		_remote_fail("Could not download generated model: " + error_string(err))
+
+func _remote_handle_job(body: PackedByteArray) -> void:
+	var parsed := DabskyRemote.parse_job_response(body)
+	if not bool(parsed.get("ok", false)):
+		_remote_fail(str(parsed.get("message", "Remote job response was invalid.")))
+		return
+	remote_job_id = str(parsed.get("job_id", ""))
+	remote_model_path = str(parsed.get("model_path", ""))
+	var job_status := str(parsed.get("status", "queued")).to_lower()
+	if job_status in ["ready", "complete", "completed", "succeeded", "success"]:
+		_remote_start_model_download(remote_model_path)
+		return
+	if remote_job_id.is_empty():
+		_remote_fail("Remote service queued a job without an id.")
+		return
+	_remote_set_state("polling", "Generating remotely…")
+	_remote_apply_progress(parsed)
+	_schedule_remote_poll(float(parsed.get("retry_after", 1.0)))
+
+func _remote_handle_status(body: PackedByteArray) -> void:
+	var parsed := DabskyRemote.parse_job_response(body)
+	if not bool(parsed.get("ok", false)):
+		_remote_fail(str(parsed.get("message", "Remote status response was invalid.")))
+		return
+	var job_status := str(parsed.get("status", "queued")).to_lower()
+	if job_status in ["failed", "error", "canceled", "cancelled"]:
+		_remote_fail(str(parsed.get("message", "Remote generation failed.")))
+		return
+	var reported_path := str(parsed.get("model_path", "")).strip_edges()
+	if not reported_path.is_empty():
+		remote_model_path = reported_path
+	if job_status in ["ready", "complete", "completed", "succeeded", "success"]:
+		_remote_start_model_download(remote_model_path)
+		return
+	var progress_message := str(parsed.get("message", "")).strip_edges()
+	if progress_message.is_empty():
+		progress_message = "Generating remotely… %d sec" % int(remote_elapsed)
+	_remote_set_state("polling", progress_message)
+	_remote_apply_progress(parsed)
+	_schedule_remote_poll(float(parsed.get("retry_after", 1.0)))
+
+func _remote_handle_model(body: PackedByteArray) -> void:
+	var added := _import_glb_bytes(body)
+	if added <= 0:
+		_remote_fail("Remote service returned no editable GLB meshes.")
+		return
+	_remote_set_state("idle", "Remote model imported: %d editable mesh(es)." % added)
+	_ai_log("Dabsky Remote", "Imported remote model with %d mesh(es)." % added)
+	status.text = "Remote model imported. Edit it or export GLB."
+
+func _on_remote_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if remote_state == "canceled":
+		return
+	if result != HTTPRequest.RESULT_SUCCESS:
+		_remote_fail("Remote request failed. Check the API URL and connection.")
+		return
+	if response_code < 200 or response_code >= 300:
+		_remote_fail("Remote API %d: %s" % [response_code, DabskyRemote.parse_error(body, "Request rejected.")])
+		return
+	match remote_request_kind:
+		"health":
+			var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+			var service := "Dabsky API"
+			var connection_message := "Remote API is reachable."
+			if parsed is Dictionary:
+				service = str(parsed.get("service", service))
+				var worker: Variant = parsed.get("worker", {})
+				if worker is Dictionary and bool(worker.get("configured", false)):
+					if not bool(worker.get("reachable", false)):
+						connection_message = "API connected, but the GPU worker is unreachable."
+					elif not bool(worker.get("ready_for_generation", false)):
+						connection_message = "GPU worker connected but is not ready yet."
+					elif not bool(worker.get("text_conditioning_available", false)):
+						connection_message = "Connected: image-to-3D ready; reference image required for prompt generation."
+					else:
+						connection_message = "Connected: image-to-3D and prompt generation ready."
+			_remote_set_state("idle", "Connected to %s." % service)
+			status.text = connection_message
+		"create":
+			_remote_handle_job(body)
+		"cancel":
+			_remote_set_state("canceled", DabskyRemote.parse_error(body, "Remote generation canceled."))
+			status.text = "Remote generation canceled."
+		"status":
+			_remote_handle_status(body)
+		"model":
+			_remote_handle_model(body)
+		_:
+			_remote_fail("Remote response arrived with an unknown request type.")
+
+func _open_remote_reference_dialog() -> void:
+	if remote_reference_dialog != null:
+		remote_reference_dialog.popup_centered()
+
+func _on_remote_reference_chosen(path: String) -> void:
+	remote_reference_path = path
+	if remote_reference_label != null:
+		remote_reference_label.text = "Reference: " + path.get_file()
+	if remote_status_label != null:
+		remote_status_label.text = "Reference image ready. Remote generation will use it."
+	status.text = "Reference image selected."
+
+func _clear_remote_reference() -> void:
+	remote_reference_path = ""
+	if remote_reference_label != null:
+		remote_reference_label.text = "No reference image selected."
+	if remote_status_label != null:
+		remote_status_label.text = "Reference cleared. Prompt-only or offline generation is ready."
 
 func _run_ai_prompt(prompt: String) -> Dictionary:
 	var parsed: Dictionary = DabskyAI.interpret(prompt)
@@ -497,6 +890,21 @@ func _build_glb_dialogs() -> void:
 	export_dialog.current_file = "Dabsky-Model.glb"
 	export_dialog.file_selected.connect(_on_export_chosen)
 	add_child(export_dialog)
+	remote_reference_dialog = FileDialog.new()
+	remote_reference_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	remote_reference_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	remote_reference_dialog.use_native_dialog = true
+	remote_reference_dialog.filters = PackedStringArray(["*.png ; PNG image", "*.jpg ; JPEG image", "*.jpeg ; JPEG image", "*.webp ; WebP image"])
+	remote_reference_dialog.file_selected.connect(_on_remote_reference_chosen)
+	add_child(remote_reference_dialog)
+	remote_request = HTTPRequest.new()
+	remote_request.timeout = 45.0
+	remote_request.request_completed.connect(_on_remote_request_completed)
+	add_child(remote_request)
+	remote_poll_timer = Timer.new()
+	remote_poll_timer.one_shot = true
+	remote_poll_timer.timeout.connect(_poll_remote_job)
+	add_child(remote_poll_timer)
 
 func _open_import_dialog() -> void:
 	import_dialog.popup_centered()
@@ -768,6 +1176,29 @@ func _make_mesh(kind: String) -> Mesh:
 			cone.top_radius = 0.0
 			return cone
 		_: return BoxMesh.new()
+
+func _add_generated_part(part: Dictionary) -> MeshInstance3D:
+	var shape := str(part.get("shape", "Cube"))
+	if shape not in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
+		shape = "Cube"
+	var obj := MeshInstance3D.new()
+	obj.mesh = _make_mesh(shape)
+	var requested_name := str(part.get("name", shape + "_Part")).strip_edges()
+	obj.name = requested_name.replace(" ", "_").substr(0, 48)
+	obj.set_meta("kind", shape)
+	obj.position = _read_vec(part.get("position"), Vector3.ZERO)
+	obj.rotation = _read_vec(part.get("rotation"), Vector3.ZERO)
+	var requested_scale := _read_vec(part.get("scale"), Vector3.ONE)
+	obj.scale = Vector3(maxf(0.01, requested_scale.x), maxf(0.01, requested_scale.y), maxf(0.01, requested_scale.z))
+	var material := StandardMaterial3D.new()
+	var requested_color: Variant = part.get("color", Color.WHITE)
+	material.albedo_color = requested_color if requested_color is Color else Color.WHITE
+	material.metallic = clampf(float(part.get("metallic", 0.0)), 0.0, 1.0)
+	material.roughness = clampf(float(part.get("roughness", 0.65)), 0.0, 1.0)
+	obj.material_override = material
+	scene_root.add_child(obj)
+	objects.append(obj)
+	return obj
 
 func _add_primitive(kind: String, track_undo: bool = true) -> void:
 	if objects.size() >= OBJECT_LIMIT:

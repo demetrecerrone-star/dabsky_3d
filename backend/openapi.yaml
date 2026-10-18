@@ -1,0 +1,108 @@
+openapi: 3.0.3
+info:
+  title: Dabsky Connect
+  version: 0.4.0
+  description: Authenticated Dabsky generation API with a procedural fallback and optional Hunyuan3D-2.1 GPU worker.
+servers:
+  - url: https://us-central1-dabsky-3d.cloudfunctions.net/dabskyApi
+    description: Expected deployment URL; must be verified after deployment.
+paths:
+  /health:
+    get:
+      summary: Check backend health
+      responses:
+        '200':
+          description: Healthy backend and configured generation modes
+  /v1/catalog:
+    get:
+      summary: List procedural and neural generation capabilities
+      responses:
+        '200':
+          description: Model catalog
+  /v1/jobs:
+    post:
+      summary: Create a Dabsky 3D model job
+      security:
+        - FirebaseBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              additionalProperties: false
+              properties:
+                prompt: { type: string, minLength: 1, maxLength: 500 }
+                reference_image:
+                  type: object
+                  required: [mime_type, data_base64]
+                  properties:
+                    filename: { type: string, maxLength: 96 }
+                    mime_type: { type: string, enum: [image/png, image/jpeg, image/webp] }
+                    data_base64: { type: string, description: Base64 image capped at 6 MB before encoding. }
+      responses:
+        '201': { description: Procedural fallback job available }
+        '202': { description: Neural worker job queued }
+        '400': { description: Invalid request }
+        '401': { description: Missing or invalid Firebase ID token }
+        '422': { description: Neural worker needs prompt conditioning configuration }
+        '429': { description: Daily quota exceeded }
+        '502': { description: Neural worker unavailable }
+  /v1/jobs/{id}:
+    get:
+      summary: Inspect job status for its owner
+      security:
+        - FirebaseBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Owner job metadata and progress }
+        '401': { description: Authentication required }
+        '404': { description: Job unavailable to this user }
+        '502': { description: Neural worker unavailable }
+  /v1/jobs/{id}/cancel:
+    post:
+      summary: Cancel an active generation job
+      security:
+        - FirebaseBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Cancellation accepted or job already terminal }
+        '401': { description: Authentication required }
+        '404': { description: Job unavailable to this user }
+        '409': { description: Job is already local or not cancellable }
+        '502': { description: Neural worker cancellation failed }
+  /v1/jobs/{id}/model:
+    get:
+      summary: Download job GLB as its owner
+      security:
+        - FirebaseBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Binary GLB
+          content:
+            model/gltf-binary:
+              schema: { type: string, format: binary }
+        '401': { description: Authentication required }
+        '404': { description: Job unavailable to this user }
+        '409': { description: Model is still generating }
+        '502': { description: Neural worker unavailable }
+components:
+  securitySchemes:
+    FirebaseBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: Firebase ID token

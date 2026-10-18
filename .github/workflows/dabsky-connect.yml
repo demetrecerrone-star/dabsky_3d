@@ -1,0 +1,39 @@
+name: Dabsky Connect backend tests
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/dabsky-connect-firebase
+      - codex/dabsky-v0.8-remote-generation
+      - codex/dabsky-ai-v1-hunyuan-worker
+    paths:
+      - "backend/**"
+      - "firebase.json"
+      - ".firebaserc"
+      - ".github/workflows/dabsky-connect.yml"
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate JavaScript syntax
+        run: |
+          node --check backend/functions/lib/generator.js
+          node --check backend/functions/lib/service.js
+          node --check backend/functions/index.js
+      - name: Test auth, quotas, model ownership and GLB binary
+        run: npm test --prefix backend/functions
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Validate Dabsky AI worker contract
+        run: |
+          python -m py_compile backend/inference/*.py backend/text-conditioner/app.py
+          python -m unittest discover -s backend/inference -p "test_*.py"
