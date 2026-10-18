@@ -37,12 +37,16 @@ docker run --gpus all --rm -p 8080:8080 \
   dabsky-ai-worker
 ```
 
-Configure Dabsky's Remote AI API field to the worker URL. If a token is set,
-put the same bearer token in the app's optional token field.
+Keep the worker URL and worker token server-side. Set the Firebase Function
+variables `DABSKY_INFERENCE_URL` and `DABSKY_INFERENCE_TOKEN`; the Android app
+should continue using the Firebase Dabsky API URL, not the RunPod URL. This
+keeps the GPU worker private and prevents the worker token from entering the
+APK.
 
-Without `DABSKY_TEXT_TO_IMAGE_URL`, reference-image generation still works and
-prompt-only requests return a clear configuration error. The Android app keeps
-its offline prompt generator as the local fallback.
+For direct worker testing, call `/health` and `/v1/catalog` with the worker
+bearer token. Without `DABSKY_TEXT_TO_IMAGE_URL`, reference-image generation
+still works and prompt-only requests return a clear configuration error. The
+Android app keeps its offline prompt generator as the local fallback.
 
 ## Important licensing gate
 
