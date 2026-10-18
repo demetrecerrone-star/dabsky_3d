@@ -20,6 +20,18 @@ This gives Dabsky a useful no-key generation path on Android immediately:
 
 This is intentionally a blockout/prototyping generator, not a claim of photorealistic neural reconstruction. The next quality step is to add a hosted or local inference adapter that returns the same recipe contract, followed by mesh cleanup, UV/material generation, rigging and validation.
 
+## v0.8 Remote generation adapter
+
+The v0.8 client in scripts/dabsky_remote.gd provides a safe provider-neutral request contract. The AI panel now supports:
+
+- API health checks against a configurable endpoint
+- prompt plus PNG/JPG/JPEG/WebP reference-image uploads capped at 6 MB
+- optional bearer token input kept in memory only
+- queued job polling, timeout handling, local cancel, retry and visible status
+- GLB download and import through the existing editable scene path
+
+The v0.8 Firebase scaffold accepts the request contract and stores only reference metadata, never the uploaded image bytes. Its current generator is still the deterministic procedural fallback. This is deliberate: it makes the client/backend seam testable without claiming that a hosted neural model already exists. The live Cloud Functions deployment remains a separate billing-gated step.
+
 ## Later release: online or local neural generation
 
 Connect a secured backend or local inference worker rather than embedding provider credentials in an Android app.
