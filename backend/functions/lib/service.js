@@ -100,7 +100,7 @@ async function submitInference(request) {
   const raw=await response.text();
   let data;
   try {data=JSON.parse(raw);} catch(_error) {data={};}
-  if(!response.ok)throw Error(String(data.detail||data.error||"Inference worker rejected the job."));
+  if(!response.ok)throw Object.assign(Error(String(data.detail||data.error||"Inference worker rejected the job.")),{status:response.status});
   if(!data.id)throw Error("Inference worker returned no job id.");
   return data;
 }
@@ -138,12 +138,12 @@ function createHandler({db,verifyIdToken,now=()=>new Date()}) {
       const url=new URL(req.url,"https://dabsky.local");
       const path=url.pathname.replace(/\/+$/,"")||"/";
       if(req.method==="GET"&&path==="/health")
-        return send(res,200,{status:"ok",service:"dabsky-connect",version:"0.3.0",
+        return send(res,200,{status:"ok",service:"dabsky-connect",version:"0.4.0",
           generator:INFERENCE_URL?"hunyuan3d-2.1-with-procedural-fallback":"procedural-fallback",
-          image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true});
+          image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true,text_conditioning:INFERENCE_URL?"worker_optional":"offline_only"});
       if(req.method==="GET"&&path==="/v1/catalog")
         return send(res,200,{types:TYPES,generator:INFERENCE_URL?"hunyuan3d-2.1":"procedural-fallback",
-          text_to_mesh_ai:false,image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true});
+          text_to_mesh_ai:Boolean(INFERENCE_URL),image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true,text_conditioning:INFERENCE_URL?"worker_optional":"offline_only"});
       if(!path.startsWith("/v1/jobs"))return send(res,404,{error:"Not found."});
 
       const match=/^\/v1\/jobs\/([A-Za-z0-9_-]{8,128})(\/model)?$/.exec(path);
