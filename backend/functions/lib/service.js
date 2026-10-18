@@ -181,6 +181,9 @@ function createHandler({db,verifyIdToken,now=()=>new Date()}) {
           try {remote=await submitInference(request);}
           catch(error) {
             console.error("Dabsky inference worker request failed:",error?.message||"unknown");
+            const code=Number(error?.status||502);
+            if(code===400||code===422)
+              return send(res,code,{error:String(error.message||"Dabsky AI worker rejected the job.")});
             return send(res,502,{error:"Dabsky AI worker is unavailable."});
           }
         }
