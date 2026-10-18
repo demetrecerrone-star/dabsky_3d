@@ -705,10 +705,21 @@ func _on_remote_request_completed(result: int, response_code: int, _headers: Pac
 		"health":
 			var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
 			var service := "Dabsky API"
+			var connection_message := "Remote API is reachable."
 			if parsed is Dictionary:
 				service = str(parsed.get("service", service))
+				var worker: Variant = parsed.get("worker", {})
+				if worker is Dictionary and bool(worker.get("configured", false)):
+					if not bool(worker.get("reachable", false)):
+						connection_message = "API connected, but the GPU worker is unreachable."
+					elif not bool(worker.get("ready_for_generation", false)):
+						connection_message = "GPU worker connected but is not ready yet."
+					elif not bool(worker.get("text_conditioning_available", false)):
+						connection_message = "Connected: image-to-3D ready; reference image required for prompt generation."
+					else:
+						connection_message = "Connected: image-to-3D and prompt generation ready."
 			_remote_set_state("idle", "Connected to %s." % service)
-			status.text = "Remote API is reachable."
+			status.text = connection_message
 		"create":
 			_remote_handle_job(body)
 		"cancel":
