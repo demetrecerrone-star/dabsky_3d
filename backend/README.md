@@ -1,46 +1,49 @@
-# Dabsky Connect v0.1 — Firebase backend
+# Dabsky Connect backend
 
 Firebase Project ID: `dabsky-3d`.
 
-**Current scope:** deployable/tested backend prototype. It creates original **procedural** GLB props: barrel, chest and table. It is NOT yet the trained text-to-3D AI and it is NOT a connected ChatGPT MCP plugin.
+The backend now has two generation modes:
 
-## Endpoints
+1. **Dabsky AI v1 worker mode** — when `DABSKY_INFERENCE_URL` is configured, authenticated jobs are forwarded to the GPU worker in `backend/inference`. The worker runs Hunyuan3D-2.1 image-to-shape generation and returns an asynchronous GLB job.
+2. **Procedural fallback mode** — when no worker URL is configured, the tested barrel/chest/table generator remains available.
 
-- `GET /health`: public service status.
-- `GET /v1/catalog`: public supported model types and capability declaration.
-- `POST /v1/jobs`: requires Firebase Auth bearer ID token and JSON `{ "prompt": "Create a medieval chest" }`; returns a ready job ID and model path.
-- `GET /v1/jobs/{id}`: requires same user's Firebase Auth ID token; returns job status.
-- `GET /v1/jobs/{id}/model`: requires same user; returns downloadable binary GLB.
+## API
 
-Prototype generation completes immediately. Metadata is stored in Firestore and binary GLBs are rebuilt deterministically when retrieved. No Firebase Storage bucket is needed at this stage.
+- `GET /health`: public service status and whether the neural worker is configured.
+- `GET /v1/catalog`: capabilities.
+- `POST /v1/jobs`: Firebase Auth bearer token plus prompt and optional reference image.
+- `GET /v1/jobs/{id}`: owner-only status and progress.
+- `GET /v1/jobs/{id}/model`: owner-only GLB download.
+
+Reference images are validated, forwarded to the private worker in memory, and reduced to metadata in Firestore. Uploaded image bytes are not stored in job documents.
+
+## Connecting the GPU worker
+
+Deploy `backend/inference` on a GPU host with the NVIDIA Container Toolkit. Set these Firebase Function environment variables:
+
+- `DABSKY_INFERENCE_URL`: private or authenticated worker URL.
+- `DABSKY_INFERENCE_TOKEN`: worker bearer token.
+
+The worker currently requires a reference image. Prompt-only text-to-image conditioning is the next model stage; until then, the Android app's offline prompt generator remains the prompt-only fallback.
 
 ## Security and limits
 
-- Firebase ID tokens verified with Admin SDK, including token revocation.
-- Each job belongs to one user. Cross-user access is intentionally returned as 404.
-- Quota limit: 20 new jobs per UID, per UTC day; Firestore transaction protects against concurrent bypass.
-- Generator only supports three procedural types. Unsupported prompts are rejected with 400 rather than hallucinating a model.
-- No service-account key in source code or Android APK; Cloud Functions uses managed credentials.
-- Firestore client rules deny all reads and writes for job and quota collections; only Admin SDK can access them.
-- Cloud Function maxInstances=1, minInstances=0. Limits reduce expense but are not an absolute cost cap.
+- Firebase ID tokens are verified with Admin SDK, including token revocation.
+- Each job belongs to one user; cross-user access returns 404.
+- Quota limit: 20 new jobs per UID per UTC day.
+- API payloads cap reference images at 6 MB.
+- No service-account key, model weights, worker token, or GPU credential is placed in the Android APK.
+- Cloud Functions deployment requires Firebase Blaze billing. Do not enable paid deployment without approving possible charges.
 
-## Local and GitHub test
+## Licensing
 
-Run `cd backend/functions && npm test`. Tests use Node's built-in runner and simulated Firebase Auth/Firestore, requiring no Firebase credentials or npm dependency download. The `.github/workflows/dabsky-connect.yml` workflow runs these tests on the research feature branch. This does not constitute a live deployed smoke test.
+The Hunyuan3D-2.1 repository states that Hunyuan 3D is under the Tencent Hunyuan Non-Commercial License Agreement. Review that license before using the worker for paid Dabsky Creative Studio features or a public commercial release. The worker includes an explicit license acknowledgement gate.
 
-## Deployment checklist (requires the Firebase project owner)
+Run the backend and worker contract tests with:
 
-1. In the Firebase console for project `dabsky-3d`, enable Firebase Authentication and a Cloud Firestore database.
-2. Cloud Functions deployment requires **Blaze pay-as-you-go** billing. Do not enable it without approving possible charges. Configure budget alerts and evaluate Cloud Run spend limits. Budget alerts do not automatically stop billing.
-3. Install Firebase CLI and authenticate on a machine or CI environment with deployment privileges. Prefer short-lived Workload Identity Federation credentials over long-lived service account JSON keys.
-4. At repository root run `cd backend/functions && npm install && cd ../.. && firebase deploy --project dabsky-3d --only firestore:rules,functions`.
-5. Test live `/health`, authentication, ownership and GLB responses at the deployed function URL.
-6. Implement a separate OAuth-protected ChatGPT MCP server/adapter if supported by the user's ChatGPT plan, so ChatGPT can invoke these operations directly. This step is **not yet implemented**.
+```bash
+npm test --prefix backend/functions
+python -m unittest discover -s backend/inference -p "test_*.py"
+```
 
-Firebase's Cloud Functions managed credentials mean the `serviceAccountKey.json` file shown in SDK examples should never be uploaded to ChatGPT or committed to GitHub.
-
-## Next
-
-- Add Android login and a model jobs panel.
-- Add accessible monitoring, deployed integration tests and job cancellation as generation becomes asynchronous.
-- Replace the procedural GLB builder with Dabsky's original learning-based model after training, licensing and quality benchmarks justify it.
+No model weights or service-account keys are committed to this repository.
