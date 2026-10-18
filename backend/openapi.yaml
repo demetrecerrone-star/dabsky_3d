@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Dabsky Connect
-  version: 0.3.0
+  version: 0.4.0
   description: Authenticated Dabsky generation API with a procedural fallback and optional Hunyuan3D-2.1 GPU worker.
 servers:
   - url: https://us-central1-dabsky-3d.cloudfunctions.net/dabskyApi
@@ -12,10 +12,10 @@ paths:
       summary: Check backend health
       responses:
         '200':
-          description: Healthy backend
+          description: Healthy backend and configured generation modes
   /v1/catalog:
     get:
-      summary: List supported procedural model types
+      summary: List procedural and neural generation capabilities
       responses:
         '200':
           description: Model catalog
@@ -44,9 +44,11 @@ paths:
       responses:
         '201': { description: Procedural fallback job available }
         '202': { description: Neural worker job queued }
-        '400': { description: Unsupported prompt }
+        '400': { description: Invalid request }
         '401': { description: Missing or invalid Firebase ID token }
+        '422': { description: Neural worker needs prompt conditioning configuration }
         '429': { description: Daily quota exceeded }
+        '502': { description: Neural worker unavailable }
   /v1/jobs/{id}:
     get:
       summary: Inspect job status for its owner
@@ -58,9 +60,10 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Owner job metadata }
+        '200': { description: Owner job metadata and progress }
         '401': { description: Authentication required }
         '404': { description: Job unavailable to this user }
+        '502': { description: Neural worker unavailable }
   /v1/jobs/{id}/model:
     get:
       summary: Download job GLB as its owner
@@ -79,6 +82,8 @@ paths:
               schema: { type: string, format: binary }
         '401': { description: Authentication required }
         '404': { description: Job unavailable to this user }
+        '409': { description: Model is still generating }
+        '502': { description: Neural worker unavailable }
 components:
   securitySchemes:
     FirebaseBearer:
