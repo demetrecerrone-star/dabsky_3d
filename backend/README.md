@@ -23,24 +23,56 @@ Reference images are validated, forwarded to the private worker in memory, and
 reduced to metadata in Firestore. Uploaded image bytes are not stored in job
 documents.
 
-## Connecting the GPU worker
+## End-to-end GPU deployment
 
-Deploy `backend/inference` on a GPU host with the NVIDIA Container Toolkit.
-Set these Firebase Function environment variables:
+Dabsky's prompt-only path uses two services:
 
-- `DABSKY_INFERENCE_URL`: private or authenticated worker URL.
-- `DABSKY_INFERENCE_TOKEN`: worker bearer token.
+1. `backend/text-conditioner` runs Hunyuan3D-1 text-to-image.
+2. `backend/inference` runs Hunyuan3D-2.1 image-to-shape and GLB export.
 
-The worker accepts prompt-only jobs when its optional text-to-image conditioner
-is configured. Set these variables on the worker for that path:
+Put them on separate GPU hosts when possible. Both models can be large, and
+keeping both resident on one GPU can cause out-of-memory failures. The
+reference-image path only needs the shape worker.
 
-- `DABSKY_TEXT_TO_IMAGE_URL`: private endpoint accepting
-  `POST {"prompt":"..." }`.
-- `DABSKY_TEXT_TO_IMAGE_TOKEN`: optional bearer token.
-- `DABSKY_TEXT_TO_IMAGE_TIMEOUT`: optional request timeout, default 120 seconds.
+Build the prompt conditioner:
 
-Without the conditioner, reference-image generation remains available and the
-Android app's offline prompt generator remains the prompt-only fallback.
+```bash
+docker build -t dabsky-text-conditioner backend/text-conditioner
+docker run --gpus all --rm -p 8090:8090 \
+  -e DABSKY_TEXT_CONDITIONER_TOKEN='conditioner-secret' \
+  -e DABSKY_HUNYUAN_LICENSE_ACK='I_HAVE_REVIEWED_LICENSE' \
+  -v /srv/dabsky/weights/hunyuanDiT:/opt/hunyuan3d1/weights/hunyuanDiT:ro \
+  dabsky-text-conditioner
+```
+
+Build the shape worker:
+
+```bash
+docker build -t dabsky-ai-worker backend/inference
+docker run --gpus all --rm -p 8080:8080 \
+  -e DABSKY_WORKER_TOKEN='worker-secret' \
+  -e DABSKY_HUNYUAN_LICENSE_ACK='I_HAVE_REVIEWED_LICENSE' \
+  -e DABSKY_TEXT_TO_IMAGE_URL='http://conditioner-host:8090/generate' \
+  -e DABSKY_TEXT_TO_IMAGE_TOKEN='conditioner-secret' \
+  dabsky-ai-worker
+```
+
+Then set these Firebase Function environment variables:
+
+- `DABSKY_INFERENCE_URL`: private or authenticated shape-worker URL.
+- `DABSKY_INFERENCE_TOKEN`: shape-worker bearer token.
+
+Check both services before connecting the Android app:
+
+```bash
+curl http://conditioner-host:8090/health
+curl http://worker-host:8080/health
+curl http://worker-host:8080/v1/catalog
+```
+
+The worker accepts prompt-only jobs when its conditioner is configured. Without
+the conditioner, reference-image generation remains available and the Android
+app's offline prompt generator remains the prompt-only fallback.
 
 ## Security and limits
 
@@ -53,13 +85,17 @@ Android app's offline prompt generator remains the prompt-only fallback.
 
 ## Licensing
 
-The Hunyuan3D-2.1 repository states that Hunyuan 3D is under the Tencent Hunyuan Non-Commercial License Agreement. Review that license before using the worker for paid Dabsky Creative Studio features or a public commercial release. The worker includes an explicit license acknowledgement gate.
+Hunyuan3D-1 and Hunyuan3D-2.1 are license-gated. Review the official Tencent
+Hunyuan license and third-party dependency licenses before using either service
+for paid Dabsky Creative Studio features or a public commercial release. Both
+services require the explicit `DABSKY_HUNYUAN_LICENSE_ACK` acknowledgement.
 
 Run the backend and worker contract tests with:
 
 ```bash
 npm test --prefix backend/functions
 python -m unittest discover -s backend/inference -p "test_*.py"
+python -m py_compile backend/text-conditioner/app.py
 ```
 
 No model weights or service-account keys are committed to this repository.
