@@ -189,6 +189,12 @@ function createHandler({db,verifyIdToken,now=()=>new Date()}) {
             worker.ready_for_generation=Boolean(remote.ready_for_generation);
             worker.text_conditioning_available=Boolean(remote.text_conditioning_available);
             worker.device=String(remote.device||"unknown");
+            const diagnostics=remote.diagnostics;
+            if(diagnostics&&typeof diagnostics==="object") {
+              worker.repo_path_exists=Boolean(diagnostics.repo_path_exists);
+              worker.shape_package_available=Boolean(diagnostics.shape_package_available);
+              worker.model_loaded=Boolean(diagnostics.model_loaded);
+            }
           } catch(_error) {
             worker.message="GPU worker is not reachable.";
           }
