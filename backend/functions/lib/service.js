@@ -8,6 +8,7 @@ const MAX_REFERENCE_BYTES=6*1024*1024;
 const REFERENCE_MIME_TYPES=new Set(["image/png","image/jpeg","image/webp"]);
 const INFERENCE_URL=String(process.env.DABSKY_INFERENCE_URL||"").replace(/\/+$/,"");
 const INFERENCE_TOKEN=String(process.env.DABSKY_INFERENCE_TOKEN||"").trim();
+const INFERENCE_HEALTH_TIMEOUT_MS=5000;
 const INFERENCE_SUBMIT_TIMEOUT_MS=180000;
 const INFERENCE_STATUS_TIMEOUT_MS=30000;
 const INFERENCE_MODEL_TIMEOUT_MS=300000;
@@ -106,6 +107,17 @@ async function inferenceFetch(url,options,timeoutMs) {
   }
 }
 
+async function readInferenceHealth() {
+  const response=await inferenceFetch(inferenceUrl("/health"),{
+    method:"GET",headers:inferenceHeaders()
+  },INFERENCE_HEALTH_TIMEOUT_MS);
+  const raw=await response.text();
+  let data;
+  try {data=JSON.parse(raw);} catch(_error) {data={};}
+  if(!response.ok)throw Error("Inference worker health check failed.");
+  return data;
+}
+
 async function submitInference(request) {
   const response=await inferenceFetch(inferenceUrl("/v1/jobs"),{
     method:"POST",
@@ -167,10 +179,25 @@ function createHandler({db,verifyIdToken,now=()=>new Date()}) {
     try {
       const url=new URL(req.url,"https://dabsky.local");
       const path=url.pathname.replace(/\/+$/,"")||"/";
-      if(req.method==="GET"&&path==="/health")
+      if(req.method==="GET"&&path==="/health") {
+        const worker={configured:Boolean(INFERENCE_URL),reachable:false};
+        if(INFERENCE_URL) {
+          try {
+            const remote=await readInferenceHealth();
+            worker.reachable=true;
+            worker.service=String(remote.service||"dabsky-ai-worker");
+            worker.ready_for_generation=Boolean(remote.ready_for_generation);
+            worker.text_conditioning_available=Boolean(remote.text_conditioning_available);
+            worker.device=String(remote.device||"unknown");
+          } catch(_error) {
+            worker.message="GPU worker is not reachable.";
+          }
+        }
         return send(res,200,{status:"ok",service:"dabsky-connect",version:"0.4.0",
           generator:INFERENCE_URL?"hunyuan3d-2.1-with-procedural-fallback":"procedural-fallback",
-          image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true,text_conditioning:INFERENCE_URL?"worker_optional":"offline_only"});
+          image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true,
+          text_conditioning:INFERENCE_URL?"worker_optional":"offline_only",worker});
+      }
       if(req.method==="GET"&&path==="/v1/catalog")
         return send(res,200,{types:TYPES,generator:INFERENCE_URL?"hunyuan3d-2.1":"procedural-fallback",
           text_to_mesh_ai:Boolean(INFERENCE_URL),image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true,text_conditioning:INFERENCE_URL?"worker_optional":"offline_only"});
