@@ -2,7 +2,7 @@ name: Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "codex/dabsky-v0.7-generation-studio"]
 permissions:
   contents: write
   issues: write
@@ -107,6 +107,8 @@ jobs:
         run: godot --headless --path . --script res://tests/v065_graphics_layout.gd
       - name: Test Android tool categories, auto-fit and draggable graphics panel
         run: godot --headless --path . --script res://tests/v066_mobile_ui.gd
+      - name: Test v0.7 prompt generation and multi-part undo
+        run: godot --headless --path . --script res://tests/v07_generation.gd
       - name: Configure permanent signing if secrets exist
         env:
           SIGNING_KEY_B64: ${{ secrets.DABSKY_KEYSTORE_BASE64 }}

@@ -3,6 +3,7 @@ extends Control
 const GlbIO = preload("res://scripts/glb_io.gd")
 const MeshEdit = preload("res://scripts/mesh_edit.gd")
 const DabskyAI = preload("res://scripts/dabsky_ai.gd")
+const DabskyGenerator = preload("res://scripts/dabsky_generator.gd")
 const GraphicsDiagnostics = preload("res://scripts/graphics_diagnostics.gd")
 var ai_panel: VBoxContainer
 var ai_prompt: LineEdit
@@ -280,7 +281,7 @@ func _build_ai_panel(parent: VBoxContainer) -> void:
 	var heading := HBoxContainer.new()
 	ai_panel.add_child(heading)
 	var title := Label.new()
-	title.text = "DABSKY AI • Offline modeling assistant"
+	title.text = "DABSKY AI • Modeling partner"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 17)
 	heading.add_child(title)
@@ -295,11 +296,13 @@ func _build_ai_panel(parent: VBoxContainer) -> void:
 	ai_panel.add_child(command_row)
 	ai_prompt = LineEdit.new()
 	ai_prompt.max_length = 500
-	ai_prompt.placeholder_text = "Try: create a cube and make it purple"
+	ai_prompt.placeholder_text = "Try a command, or describe an asset to generate"
+	ai_prompt.tooltip_text = "Examples: stylized red sword • low-poly pine tree • fantasy cottage"
 	ai_prompt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ai_prompt.text_submitted.connect(func(_text: String): _submit_ai())
 	command_row.add_child(ai_prompt)
 	_add_button(command_row, "Ask", _submit_ai)
+	_add_button(command_row, "Generate Model", _generate_from_prompt)
 	_add_button(command_row, "Examples", _ai_examples)
 	_ai_log("Dabsky AI", "Ready. I work offline with basic shapes, transforms, materials and project commands.")
 
@@ -338,7 +341,7 @@ func _toggle_ai_panel() -> void:
 		status.text = "AI panel hidden. Modeling tools remain available."
 
 func _ai_examples() -> void:
-	_ai_log("Dabsky AI", DabskyAI.HELP)
+	_ai_log("Dabsky AI", DabskyAI.HELP + "\nGenerate Model examples: stylized red sword • low-poly pine tree • fantasy cottage • purple crystal.")
 
 func _ai_log(speaker: String, message: String) -> void:
 	ai_messages.append("%s: %s" % [speaker, message])
@@ -357,6 +360,44 @@ func _submit_ai() -> void:
 	var outcome: Dictionary = _run_ai_prompt(prompt)
 	_ai_log("Dabsky AI", str(outcome.get("message", "Unknown result.")))
 	status.text = str(outcome.get("message", "Unknown result.")).substr(0, 160)
+
+func _generate_from_prompt() -> void:
+	var prompt := ai_prompt.text.strip_edges()
+	if prompt.is_empty():
+		status.text = "Describe an asset first."
+		return
+	var result: Dictionary = DabskyGenerator.generate(prompt)
+	_ai_log("You", "Generate: " + prompt)
+	if not bool(result.get("ok", false)):
+		var failure := str(result.get("message", "Generation request rejected."))
+		_ai_log("Dabsky AI", failure)
+		status.text = failure
+		return
+	var parts: Array = result.get("parts", [])
+	if parts.is_empty():
+		status.text = "The generator returned no editable parts."
+		return
+	if objects.size() + parts.size() > OBJECT_LIMIT:
+		status.text = "Not enough scene space for this asset. Delete an object first."
+		return
+	_cancel()
+	_record_change()
+	var first_part: MeshInstance3D = null
+	for part_value in parts:
+		if not part_value is Dictionary:
+			continue
+		var part: Dictionary = part_value
+		var created: MeshInstance3D = _add_generated_part(part)
+		if first_part == null:
+			first_part = created
+	if first_part == null:
+		status.text = "The generator returned invalid parts."
+		return
+	_select_object(first_part)
+	call_deferred("_fit_model_to_view")
+	var message := str(result.get("message", "Model generated."))
+	_ai_log("Dabsky AI", message)
+	status.text = message
 
 func _run_ai_prompt(prompt: String) -> Dictionary:
 	var parsed: Dictionary = DabskyAI.interpret(prompt)
@@ -768,6 +809,29 @@ func _make_mesh(kind: String) -> Mesh:
 			cone.top_radius = 0.0
 			return cone
 		_: return BoxMesh.new()
+
+func _add_generated_part(part: Dictionary) -> MeshInstance3D:
+	var shape := str(part.get("shape", "Cube"))
+	if shape not in ["Cube", "Sphere", "Cylinder", "Plane", "Cone"]:
+		shape = "Cube"
+	var obj := MeshInstance3D.new()
+	obj.mesh = _make_mesh(shape)
+	var requested_name := str(part.get("name", shape + "_Part")).strip_edges()
+	obj.name = requested_name.replace(" ", "_").substr(0, 48)
+	obj.set_meta("kind", shape)
+	obj.position = _read_vec(part.get("position"), Vector3.ZERO)
+	obj.rotation = _read_vec(part.get("rotation"), Vector3.ZERO)
+	var requested_scale := _read_vec(part.get("scale"), Vector3.ONE)
+	obj.scale = Vector3(maxf(0.01, requested_scale.x), maxf(0.01, requested_scale.y), maxf(0.01, requested_scale.z))
+	var material := StandardMaterial3D.new()
+	var requested_color: Variant = part.get("color", Color.WHITE)
+	material.albedo_color = requested_color if requested_color is Color else Color.WHITE
+	material.metallic = clampf(float(part.get("metallic", 0.0)), 0.0, 1.0)
+	material.roughness = clampf(float(part.get("roughness", 0.65)), 0.0, 1.0)
+	obj.material_override = material
+	scene_root.add_child(obj)
+	objects.append(obj)
+	return obj
 
 func _add_primitive(kind: String, track_undo: bool = true) -> void:
 	if objects.size() >= OBJECT_LIMIT:
