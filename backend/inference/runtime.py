@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -35,12 +36,10 @@ class HunyuanRuntime:
         if repo_exists:
             try:
                 shape_package_available = (
-                    __import__("importlib").util.find_spec(
-                        "hy3dshape", [str(self.repo_path)]
-                    )
+                    find_spec("hy3dshape", [str(self.repo_path)])
                     is not None
                 )
-            except (ImportError, ModuleNotFoundError, ValueError):
+            except (ImportError, ModuleNotFoundError, ValueError, AttributeError):
                 shape_package_available = False
         return {
             "license_acknowledged": license_acknowledged,
@@ -48,6 +47,16 @@ class HunyuanRuntime:
             "shape_package_available": shape_package_available,
             "model_loaded": self._shape_pipeline is not None,
         }
+
+    def readiness(self) -> dict[str, Any]:
+        """Return diagnostics plus the conditions required before generation."""
+        diagnostics = self.diagnostics()
+        diagnostics["ready_for_generation"] = bool(
+            diagnostics["license_acknowledged"]
+            and diagnostics["repo_path_exists"]
+            and diagnostics["shape_package_available"]
+        )
+        return diagnostics
 
     def _check_license_gate(self) -> None:
         acknowledgement = os.getenv("DABSKY_HUNYUAN_LICENSE_ACK", "").strip()
