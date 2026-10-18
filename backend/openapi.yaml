@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Dabsky Connect
-  version: 0.1.0
-  description: Authenticated procedural GLB job prototype; not a learned text-to-mesh model.
+  version: 0.3.0
+  description: Authenticated Dabsky generation API with a procedural fallback and optional Hunyuan3D-2.1 GPU worker.
 servers:
   - url: https://us-central1-dabsky-3d.cloudfunctions.net/dabskyApi
     description: Expected deployment URL; must be verified after deployment.
@@ -21,7 +21,7 @@ paths:
           description: Model catalog
   /v1/jobs:
     post:
-      summary: Create a procedural 3D model job
+      summary: Create a Dabsky 3D model job
       security:
         - FirebaseBearer: []
       requestBody:
@@ -33,9 +33,17 @@ paths:
               required: [prompt]
               additionalProperties: false
               properties:
-                prompt: { type: string, minLength: 1, maxLength: 180 }
+                prompt: { type: string, minLength: 1, maxLength: 500 }
+                reference_image:
+                  type: object
+                  required: [mime_type, data_base64]
+                  properties:
+                    filename: { type: string, maxLength: 96 }
+                    mime_type: { type: string, enum: [image/png, image/jpeg, image/webp] }
+                    data_base64: { type: string, description: Base64 image capped at 6 MB before encoding. }
       responses:
-        '201': { description: Generated job available }
+        '201': { description: Procedural fallback job available }
+        '202': { description: Neural worker job queued }
         '400': { description: Unsupported prompt }
         '401': { description: Missing or invalid Firebase ID token }
         '429': { description: Daily quota exceeded }
