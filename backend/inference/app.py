@@ -65,6 +65,14 @@ def _set_job(job_id: str, **values: Any) -> None:
         jobs[job_id].update(values)
 
 
+def _is_cancelled(job_id: str) -> bool:
+    with jobs_lock:
+        job = jobs.get(job_id)
+        return job is None or job.get("status") == "canceled" or bool(
+            job.get("cancel_requested", False)
+        )
+
+
 def _write_reference(job_id: str, reference: dict[str, Any]) -> Path:
     suffix = {
         "image/png": ".png",
@@ -94,16 +102,28 @@ def _run_generation(job_id: str, prompt: str, reference: dict[str, Any]) -> None
     output_path = RESULT_ROOT / job_id / "model.glb"
     try:
         reference_path = _write_reference(job_id, reference)
+        if _is_cancelled(job_id):
+            return
         _set_job(job_id, status="running", progress=8, message="Loading Dabsky AI model…")
+        if _is_cancelled(job_id):
+            return
         _set_job(job_id, progress=20, message="Reconstructing 3D shape…")
         mesh = runtime.generate_shape(reference_path)
+        if _is_cancelled(job_id):
+            output_path.unlink(missing_ok=True)
+            return
         _set_job(job_id, progress=88, message="Validating game-ready GLB…")
         _export_glb(mesh, output_path)
+        if _is_cancelled(job_id):
+            output_path.unlink(missing_ok=True)
+            return
         _set_job(job_id, status="ready", progress=100, message="Model ready.")
     except ModelLicenseError as exc:
-        _set_job(job_id, status="failed", message=str(exc))
+        if not _is_cancelled(job_id):
+            _set_job(job_id, status="failed", message=str(exc))
     except Exception as exc:
-        _set_job(job_id, status="failed", message=f"Generation failed: {exc}")
+        if not _is_cancelled(job_id):
+            _set_job(job_id, status="failed", message=f"Generation failed: {exc}")
     finally:
         if reference_path is not None:
             try:
@@ -174,9 +194,27 @@ async def create_job(request: Request) -> JSONResponse:
             "progress": 0,
             "message": "Queued for Dabsky AI generation.",
             "prompt": payload["prompt"],
+            "cancel_requested": False,
         }
     executor.submit(_run_generation, job_id, payload["prompt"], reference)
     return JSONResponse(_snapshot(job_id), status_code=202)
+
+
+@app.post("/v1/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, request: Request) -> JSONResponse:
+    _authorized(request)
+    with jobs_lock:
+        if job_id not in jobs:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        job = jobs[job_id]
+        if job["status"] in {"ready", "failed", "canceled"}:
+            return JSONResponse(_snapshot(job_id))
+        job.update(
+            status="canceled",
+            message="Cancellation requested.",
+            cancel_requested=True,
+        )
+    return JSONResponse(_snapshot(job_id))
 
 
 @app.get("/v1/jobs/{job_id}")
