@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import sys
-from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -34,13 +33,10 @@ class HunyuanRuntime:
         repo_exists = self.repo_path.exists()
         shape_package_available = False
         if repo_exists:
-            try:
-                shape_package_available = (
-                    find_spec("hy3dshape", [str(self.repo_path)])
-                    is not None
-                )
-            except (ImportError, ModuleNotFoundError, ValueError, AttributeError):
-                shape_package_available = False
+            # The Hunyuan checkout exposes the shape runtime as this package.
+            # Check the checkout directly so diagnostics work before imports or
+            # CUDA/model loading have occurred.
+            shape_package_available = (self.repo_path / "hy3dshape").is_dir()
         return {
             "license_acknowledged": license_acknowledged,
             "repo_path_exists": repo_exists,
