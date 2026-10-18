@@ -52,6 +52,7 @@ static func parse_job_response(body: PackedByteArray) -> Dictionary:
 			"job_id": job_id,
 			"status": status,
 			"model_path": model_path,
+			"progress": clampf(float(data.get("progress", 0.0)), 0.0, 100.0),
 			"retry_after": retry_after,
 			"message": str(data.get("message", "Generation request accepted."))
 		}
