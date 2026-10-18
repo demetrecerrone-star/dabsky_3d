@@ -506,7 +506,7 @@ func _remote_endpoint_url(path: String) -> String:
 
 func _remote_set_state(next_state: String, message: String = "") -> void:
 	remote_state = next_state
-	var busy := next_state in ["checking", "submitting", "polling", "downloading"]
+	var busy := next_state in ["checking", "submitting", "polling", "downloading", "canceling"]
 	if remote_progress != null:
 		remote_progress.visible = busy
 		remote_progress.indeterminate = busy
@@ -595,11 +595,23 @@ func _retry_remote_generation() -> void:
 func _cancel_remote_generation() -> void:
 	if remote_poll_timer != null:
 		remote_poll_timer.stop()
+	if remote_state == "polling" and not remote_job_id.is_empty():
+		_remote_set_state("canceling", "Requesting remote cancellation…")
+		remote_request_kind = "cancel"
+		var err := remote_request.request(
+			_remote_endpoint_url("/v1/jobs/%s/cancel" % remote_job_id),
+			_remote_headers(),
+			HTTPClient.METHOD_POST
+		)
+		if err != OK:
+			_remote_set_state("canceled", "Canceled locally. The backend may finish its server job.")
+			status.text = "Remote generation canceled locally."
+		return
 	if remote_request != null:
 		remote_request.cancel_request()
 	remote_request_kind = ""
 	_remote_set_state("canceled", "Canceled locally. The backend may finish its server job.")
-	status.text = "Remote generation canceled."
+	status.text = "Remote generation canceled locally."
 
 func _poll_remote_job() -> void:
 	if remote_state != "polling" or remote_job_id.is_empty():
@@ -699,6 +711,9 @@ func _on_remote_request_completed(result: int, response_code: int, _headers: Pac
 			status.text = "Remote API is reachable."
 		"create":
 			_remote_handle_job(body)
+		"cancel":
+			_remote_set_state("canceled", DabskyRemote.parse_error(body, "Remote generation canceled."))
+			status.text = "Remote generation canceled."
 		"status":
 			_remote_handle_status(body)
 		"model":
