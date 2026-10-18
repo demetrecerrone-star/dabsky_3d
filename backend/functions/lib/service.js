@@ -135,6 +135,17 @@ async function readInferenceJob(workerJobId) {
   return data;
 }
 
+async function cancelInferenceJob(workerJobId) {
+  const response=await inferenceFetch(inferenceUrl("/v1/jobs/"+encodeURIComponent(workerJobId)+"/cancel"),{
+    method:"POST",headers:inferenceHeaders()
+  },INFERENCE_STATUS_TIMEOUT_MS);
+  const raw=await response.text();
+  let data;
+  try {data=JSON.parse(raw);} catch(_error) {data={};}
+  if(!response.ok)throw Error(String(data.detail||data.error||"Inference cancellation failed."));
+  return data;
+}
+
 async function readInferenceModel(workerJobId) {
   const response=await inferenceFetch(inferenceUrl("/v1/jobs/"+encodeURIComponent(workerJobId)+"/model"),{
     method:"GET",headers:inferenceHeaders()
@@ -165,9 +176,12 @@ function createHandler({db,verifyIdToken,now=()=>new Date()}) {
           text_to_mesh_ai:Boolean(INFERENCE_URL),image_to_mesh_ai:Boolean(INFERENCE_URL),reference_images:true,text_conditioning:INFERENCE_URL?"worker_optional":"offline_only"});
       if(!path.startsWith("/v1/jobs"))return send(res,404,{error:"Not found."});
 
-      const match=/^\/v1\/jobs\/([A-Za-z0-9_-]{8,128})(\/model)?$/.exec(path);
+      const match=/^\/v1\/jobs\/([A-Za-z0-9_-]{8,128})(\/model|\/cancel)?$/.exec(path);
       const listing=path==="/v1/jobs";
-      if((listing&&req.method!=="POST")||(match&&req.method!=="GET")||(!listing&&!match))
+      const isCancel=Boolean(match&&match[2]==="/cancel");
+      if((listing&&req.method!=="POST")||
+         (match&&((isCancel&&req.method!=="POST")||(!isCancel&&req.method!=="GET")))||
+         (!listing&&!match))
         return send(res,405,{error:"Unsupported route or method."});
 
       const header=String(req.headers?.authorization||"");
@@ -222,6 +236,22 @@ function createHandler({db,verifyIdToken,now=()=>new Date()}) {
       const job=await jobRef.get();
       if(!job.exists||job.data()?.uid!==uid)return send(res,404,{error:"Job not found."});
       const data=job.data();
+
+      if(isCancel) {
+        if(!data.worker_job_id)
+          return send(res,409,{error:"This job is already local and cannot be canceled."});
+        if(!INFERENCE_URL)
+          return send(res,503,{error:"Inference worker is not configured."});
+        try {
+          const remote=await cancelInferenceJob(data.worker_job_id);
+          const status=String(remote.status||"canceled");
+          await jobRef.set({...data,status});
+          return send(res,200,{id:match[1],kind:data.kind,status,
+            message:String(remote.message||"Cancellation requested.")});
+        } catch(_error) {
+          return send(res,502,{error:"Dabsky AI worker cancellation failed."});
+        }
+      }
 
       if(data.worker_job_id) {
         if(!INFERENCE_URL)return send(res,503,{error:"Inference worker is not configured."});
