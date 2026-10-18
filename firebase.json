@@ -1,0 +1,16 @@
+{
+  "functions": [
+    {
+      "source": "backend/functions",
+      "codebase": "dabsky-connect",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "*.log"
+      ]
+    }
+  ],
+  "firestore": {
+    "rules": "backend/firestore.rules"
+  }
+}
