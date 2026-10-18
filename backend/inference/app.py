@@ -135,6 +135,7 @@ def _run_generation(job_id: str, prompt: str, reference: dict[str, Any]) -> None
 @app.get("/health")
 async def health(request: Request) -> JSONResponse:
     _authorized(request)
+    diagnostics = runtime.readiness()
     return JSONResponse(
         {
             "status": "ok",
@@ -142,12 +143,9 @@ async def health(request: Request) -> JSONResponse:
             "version": "1.1.0",
             "model": runtime.model_path,
             "device": runtime.device,
-            "ready_for_generation": os.getenv(
-                "DABSKY_HUNYUAN_LICENSE_ACK", ""
-            ).strip()
-            == "I_HAVE_REVIEWED_LICENSE",
+            "ready_for_generation": diagnostics["ready_for_generation"],
             "text_conditioning_available": conditioner.available(),
-            "diagnostics": runtime.diagnostics(),
+            "diagnostics": diagnostics,
         }
     )
 
