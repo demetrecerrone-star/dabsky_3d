@@ -126,6 +126,24 @@ test("per-user daily quota caps server-side procedural generation",async()=>{
   assert.equal(limit.code,429);
   assert.equal((await send(handler,"POST","/v1/jobs","bob",{prompt:"barrel"})).code,201);
 });
+test("reference image metadata is accepted without storing the image bytes",async()=>{
+  const handler=createHandler({db:mockStore(),verifyIdToken:async token=>({uid:token})});
+  const create=await send(handler,"POST","/v1/jobs","alice",{
+    prompt:"a reference chest",
+    output_format:"glb",
+    client:"dabsky-3d-studio",
+    reference_image:{
+      filename:"chest.png",
+      mime_type:"image/png",
+      data_base64:Buffer.from([137,80,78,71,0,1,2]).toString("base64")
+    }
+  });
+  assert.equal(create.code,201);
+  assert.equal(create.body.reference_image,true);
+  const job=await send(handler,"GET","/v1/jobs/"+create.body.id,"alice");
+  assert.equal(job.code,200);
+  assert.equal(job.body.reference_image,true);
+});
 test("bad Firebase ID tokens are denied without leaking backend error details",async()=>{
   const handler=createHandler({db:mockStore(),
     verifyIdToken:async()=>{throw new Error("Sensitive service account failure.");}});
