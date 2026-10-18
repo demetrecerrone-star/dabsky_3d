@@ -100,7 +100,7 @@ var transform_tools: ScrollContainer
 var workspace_entered_once := false
 
 const REMOTE_API_DEFAULT := "https://us-central1-dabsky-3d.cloudfunctions.net/dabskyApi"
-const REMOTE_JOB_TIMEOUT_SECONDS := 90.0
+const REMOTE_JOB_TIMEOUT_SECONDS := 900.0
 var remote_endpoint: LineEdit
 var remote_token: LineEdit
 var remote_reference_label: Label
@@ -523,6 +523,16 @@ func _remote_set_state(next_state: String, message: String = "") -> void:
 	if not message.is_empty() and remote_status_label != null:
 		remote_status_label.text = message
 
+func _remote_apply_progress(parsed: Dictionary) -> void:
+	if remote_progress == null:
+		return
+	var progress := clampf(float(parsed.get("progress", 0.0)), 0.0, 100.0)
+	if progress > 0.0:
+		remote_progress.indeterminate = false
+		remote_progress.value = progress
+	else:
+		remote_progress.indeterminate = true
+
 func _remote_fail(message: String) -> void:
 	if remote_poll_timer != null:
 		remote_poll_timer.stop()
@@ -636,6 +646,7 @@ func _remote_handle_job(body: PackedByteArray) -> void:
 		_remote_fail("Remote service queued a job without an id.")
 		return
 	_remote_set_state("polling", "Generating remotely…")
+	_remote_apply_progress(parsed)
 	_schedule_remote_poll(float(parsed.get("retry_after", 1.0)))
 
 func _remote_handle_status(body: PackedByteArray) -> void:
@@ -653,7 +664,11 @@ func _remote_handle_status(body: PackedByteArray) -> void:
 	if job_status in ["ready", "complete", "completed", "succeeded", "success"]:
 		_remote_start_model_download(remote_model_path)
 		return
-	_remote_set_state("polling", "Generating remotely… %d sec" % int(remote_elapsed))
+	var progress_message := str(parsed.get("message", "")).strip_edges()
+	if progress_message.is_empty():
+		progress_message = "Generating remotely… %d sec" % int(remote_elapsed)
+	_remote_set_state("polling", progress_message)
+	_remote_apply_progress(parsed)
 	_schedule_remote_poll(float(parsed.get("retry_after", 1.0)))
 
 func _remote_handle_model(body: PackedByteArray) -> void:
