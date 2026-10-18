@@ -2,7 +2,7 @@ name: Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "codex/dabsky-v0.7-generation-studio"]
 permissions:
   contents: write
   issues: write
