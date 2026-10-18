@@ -19,6 +19,6 @@ The v0.8 AI panel adds a provider-neutral remote generation path:
 - remote GLB results import through the same editable scene, undo and export pipeline
 - local generation remains available when the network or backend is unavailable
 
-The included backend now has a real GPU worker milestone under backend/inference. It wraps Hunyuan3D-2.1 image-to-3D generation behind an asynchronous Dabsky job API, then returns editable GLB output through the Android app. The worker is intentionally license-gated and requires a GPU deployment; until it is configured, Dabsky keeps its tested procedural/offline fallback. Prompt-only text conditioning is the next model stage.
+The included backend now has a real GPU worker milestone under backend/inference. It wraps Hunyuan3D-2.1 image-to-3D generation behind an asynchronous Dabsky job API, then returns editable GLB output through the Android app. The worker is intentionally license-gated and requires a GPU deployment; until it is configured, Dabsky keeps its tested procedural/offline fallback. Prompt-only jobs can use the optional private text-to-image conditioning adapter, then enter the same 3D shape pipeline.
 
 Run the Godot headless tests with the scripts in `tests/`.
