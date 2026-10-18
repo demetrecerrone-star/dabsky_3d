@@ -1,14 +1,24 @@
 import base64
+import os
 import unittest
 
+from conditioning import TextConditioner
 from contract import MAX_PROMPT_CHARS, PayloadError, decode_payload
 
 
 class ContractTests(unittest.TestCase):
-    def test_prompt_only_is_valid_but_worker_requires_reference(self) -> None:
+    def test_prompt_only_is_valid_for_optional_conditioning(self) -> None:
         payload = decode_payload({"prompt": "a stylized fantasy shield"})
         self.assertEqual(payload["prompt"], "a stylized fantasy shield")
         self.assertIsNone(payload["reference"])
+
+    def test_text_conditioner_is_optional_by_environment(self) -> None:
+        original = os.environ.pop("DABSKY_TEXT_TO_IMAGE_URL", None)
+        try:
+            self.assertFalse(TextConditioner().available())
+        finally:
+            if original is not None:
+                os.environ["DABSKY_TEXT_TO_IMAGE_URL"] = original
 
     def test_reference_is_decoded_and_capped(self) -> None:
         raw = b"png-fixture"
