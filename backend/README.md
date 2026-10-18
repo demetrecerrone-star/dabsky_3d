@@ -4,8 +4,12 @@ Firebase Project ID: `dabsky-3d`.
 
 The backend now has two generation modes:
 
-1. **Dabsky AI v1 worker mode** — when `DABSKY_INFERENCE_URL` is configured, authenticated jobs are forwarded to the GPU worker in `backend/inference`. The worker runs Hunyuan3D-2.1 image-to-shape generation and returns an asynchronous GLB job.
-2. **Procedural fallback mode** — when no worker URL is configured, the tested barrel/chest/table generator remains available.
+1. **Dabsky AI v1 worker mode** — when `DABSKY_INFERENCE_URL` is configured,
+   authenticated jobs are forwarded to the GPU worker in
+   `backend/inference`. The worker runs Hunyuan3D-2.1 image-to-shape generation
+   and returns an asynchronous GLB job.
+2. **Procedural fallback mode** — when no worker URL is configured, the tested
+   barrel/chest/table generator remains available.
 
 ## API
 
@@ -15,16 +19,28 @@ The backend now has two generation modes:
 - `GET /v1/jobs/{id}`: owner-only status and progress.
 - `GET /v1/jobs/{id}/model`: owner-only GLB download.
 
-Reference images are validated, forwarded to the private worker in memory, and reduced to metadata in Firestore. Uploaded image bytes are not stored in job documents.
+Reference images are validated, forwarded to the private worker in memory, and
+reduced to metadata in Firestore. Uploaded image bytes are not stored in job
+documents.
 
 ## Connecting the GPU worker
 
-Deploy `backend/inference` on a GPU host with the NVIDIA Container Toolkit. Set these Firebase Function environment variables:
+Deploy `backend/inference` on a GPU host with the NVIDIA Container Toolkit.
+Set these Firebase Function environment variables:
 
 - `DABSKY_INFERENCE_URL`: private or authenticated worker URL.
 - `DABSKY_INFERENCE_TOKEN`: worker bearer token.
 
-The worker currently requires a reference image. Prompt-only text-to-image conditioning is the next model stage; until then, the Android app's offline prompt generator remains the prompt-only fallback.
+The worker accepts prompt-only jobs when its optional text-to-image conditioner
+is configured. Set these variables on the worker for that path:
+
+- `DABSKY_TEXT_TO_IMAGE_URL`: private endpoint accepting
+  `POST {"prompt":"..." }`.
+- `DABSKY_TEXT_TO_IMAGE_TOKEN`: optional bearer token.
+- `DABSKY_TEXT_TO_IMAGE_TIMEOUT`: optional request timeout, default 120 seconds.
+
+Without the conditioner, reference-image generation remains available and the
+Android app's offline prompt generator remains the prompt-only fallback.
 
 ## Security and limits
 
