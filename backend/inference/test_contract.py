@@ -35,6 +35,14 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(payload["reference"]["bytes"], raw)
         self.assertEqual(payload["reference"]["mime_type"], "image/png")
 
+    def test_only_glb_output_is_supported(self) -> None:
+        self.assertEqual(
+            decode_payload({"prompt": "a shield", "output_format": "GLB"})["output_format"],
+            "glb",
+        )
+        with self.assertRaises(PayloadError):
+            decode_payload({"prompt": "a shield", "output_format": "fbx"})
+
     def test_invalid_and_oversized_requests_are_rejected(self) -> None:
         with self.assertRaises(PayloadError):
             decode_payload({"prompt": ""})
