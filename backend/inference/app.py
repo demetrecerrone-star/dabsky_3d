@@ -37,8 +37,16 @@ app = FastAPI(title="Dabsky AI v1 GPU worker", version="1.1.0")
 
 def _authorized(request: Request) -> None:
     expected = os.getenv("DABSKY_WORKER_TOKEN", "").strip()
+    allow_unauthenticated = os.getenv(
+        "DABSKY_ALLOW_UNAUTHENTICATED", ""
+    ).strip().lower() in {"1", "true", "yes"}
     if not expected:
-        return
+        if allow_unauthenticated:
+            return
+        raise HTTPException(
+            status_code=503,
+            detail="Worker authentication is not configured.",
+        )
     supplied = request.headers.get("authorization", "")
     if not supplied.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Worker token required.")
