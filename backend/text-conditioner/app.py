@@ -94,8 +94,16 @@ runtime = HunyuanTextRuntime()
 
 def _authorized(request: Request) -> None:
     expected = os.getenv("DABSKY_TEXT_CONDITIONER_TOKEN", "").strip()
+    allow_unauthenticated = os.getenv(
+        "DABSKY_ALLOW_UNAUTHENTICATED", ""
+    ).strip().lower() in {"1", "true", "yes"}
     if not expected:
-        return
+        if allow_unauthenticated:
+            return
+        raise HTTPException(
+            status_code=503,
+            detail="Conditioner authentication is not configured.",
+        )
     supplied = request.headers.get("authorization", "")
     if not supplied.startswith("Bearer ") or not hmac.compare_digest(
         supplied[7:], expected
