@@ -4,11 +4,11 @@
  * This is NOT the trained text-to-mesh AI. All output is simple static geometry.
  */
 const TYPES = Object.freeze(["barrel", "chest", "table"]);
-const MAX_PROMPT_CHARS = 180;
+const MAX_PROMPT_CHARS = 500;
 
 function classify(prompt) {
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > MAX_PROMPT_CHARS) {
-    throw new RangeError("Prompt must contain 1–180 characters.");
+    throw new RangeError("Prompt must contain 1–500 characters.");
   }
   const text = prompt.toLowerCase();
   const kinds = TYPES.filter((type) => new RegExp("\\b" + type + "s?\\b").test(text));
