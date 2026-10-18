@@ -147,6 +147,7 @@ async def health(request: Request) -> JSONResponse:
             ).strip()
             == "I_HAVE_REVIEWED_LICENSE",
             "text_conditioning_available": conditioner.available(),
+            "diagnostics": runtime.diagnostics(),
         }
     )
 
