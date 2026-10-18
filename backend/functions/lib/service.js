@@ -8,6 +8,9 @@ const MAX_REFERENCE_BYTES=6*1024*1024;
 const REFERENCE_MIME_TYPES=new Set(["image/png","image/jpeg","image/webp"]);
 const INFERENCE_URL=String(process.env.DABSKY_INFERENCE_URL||"").replace(/\/+$/,"");
 const INFERENCE_TOKEN=String(process.env.DABSKY_INFERENCE_TOKEN||"").trim();
+const INFERENCE_SUBMIT_TIMEOUT_MS=180000;
+const INFERENCE_STATUS_TIMEOUT_MS=30000;
+const INFERENCE_MODEL_TIMEOUT_MS=300000;
 
 function send(res,status,data) {
   res.setHeader("Cache-Control","no-store");
@@ -37,6 +40,8 @@ function parseBody(req) {
   if(!body||typeof body!=="object"||Array.isArray(body))throw new RangeError("Expected a JSON object.");
   const allowed=new Set(["prompt","output_format","client","client_version","reference_image"]);
   if(Object.keys(body).some(key=>!allowed.has(key)))throw new RangeError("Unsupported request field.");
+  const outputFormat=String(body.output_format??"glb").trim().toLowerCase();
+  if(outputFormat!=="glb")throw new RangeError("Only GLB output is currently supported.");
   if(typeof body.prompt!=="string"||body.prompt.trim().length<1||body.prompt.length>MAX_PROMPT_CHARS)
     throw new RangeError("Invalid prompt.");
 
@@ -87,8 +92,22 @@ function inferenceUrl(path) {
   return INFERENCE_URL+(path.startsWith("/")?path:"/"+path);
 }
 
+async function inferenceFetch(url,options,timeoutMs) {
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try {
+    return await fetch(url,{...options,signal:controller.signal});
+  } catch(error) {
+    if(error?.name==="AbortError")
+      throw Object.assign(Error("Dabsky AI worker timed out."),{code:"INFERENCE_TIMEOUT"});
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function submitInference(request) {
-  const response=await fetch(inferenceUrl("/v1/jobs"),{
+  const response=await inferenceFetch(inferenceUrl("/v1/jobs"),{
     method:"POST",
     headers:inferenceHeaders(),
     body:JSON.stringify({
@@ -96,7 +115,7 @@ async function submitInference(request) {
       output_format:"glb",
       reference_image:request.reference_payload
     })
-  });
+  },INFERENCE_SUBMIT_TIMEOUT_MS);
   const raw=await response.text();
   let data;
   try {data=JSON.parse(raw);} catch(_error) {data={};}
@@ -106,9 +125,9 @@ async function submitInference(request) {
 }
 
 async function readInferenceJob(workerJobId) {
-  const response=await fetch(inferenceUrl("/v1/jobs/"+encodeURIComponent(workerJobId)),{
+  const response=await inferenceFetch(inferenceUrl("/v1/jobs/"+encodeURIComponent(workerJobId)),{
     method:"GET",headers:inferenceHeaders()
-  });
+  },INFERENCE_STATUS_TIMEOUT_MS);
   const raw=await response.text();
   let data;
   try {data=JSON.parse(raw);} catch(_error) {data={};}
@@ -117,9 +136,9 @@ async function readInferenceJob(workerJobId) {
 }
 
 async function readInferenceModel(workerJobId) {
-  const response=await fetch(inferenceUrl("/v1/jobs/"+encodeURIComponent(workerJobId)+"/model"),{
+  const response=await inferenceFetch(inferenceUrl("/v1/jobs/"+encodeURIComponent(workerJobId)+"/model"),{
     method:"GET",headers:inferenceHeaders()
-  });
+  },INFERENCE_MODEL_TIMEOUT_MS);
   if(!response.ok) {
     const raw=await response.text();
     let data;
