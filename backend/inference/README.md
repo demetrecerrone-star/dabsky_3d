@@ -37,6 +37,10 @@ docker run --gpus all --rm -p 8080:8080 \
   dabsky-ai-worker
 ```
 
+The worker and conditioner fail closed when their bearer-token environment
+variables are missing. For local-only development, you may set
+`DABSKY_ALLOW_UNAUTHENTICATED=true`; never set that override on a public Pod.
+
 Keep the worker URL and worker token server-side. Set the Firebase Function
 variables `DABSKY_INFERENCE_URL` and `DABSKY_INFERENCE_TOKEN`; the Android app
 should continue using the Firebase Dabsky API URL, not the RunPod URL. This
