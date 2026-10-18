@@ -24,6 +24,31 @@ class HunyuanRuntime:
         self.device = os.getenv("DABSKY_MODEL_DEVICE", "cuda")
         self._shape_pipeline: Any | None = None
 
+    def diagnostics(self) -> dict[str, Any]:
+        """Return lightweight setup diagnostics without loading model weights."""
+        license_acknowledged = (
+            os.getenv("DABSKY_HUNYUAN_LICENSE_ACK", "").strip()
+            == "I_HAVE_REVIEWED_LICENSE"
+        )
+        repo_exists = self.repo_path.exists()
+        shape_package_available = False
+        if repo_exists:
+            try:
+                shape_package_available = (
+                    __import__("importlib").util.find_spec(
+                        "hy3dshape", [str(self.repo_path)]
+                    )
+                    is not None
+                )
+            except (ImportError, ModuleNotFoundError, ValueError):
+                shape_package_available = False
+        return {
+            "license_acknowledged": license_acknowledged,
+            "repo_path_exists": repo_exists,
+            "shape_package_available": shape_package_available,
+            "model_loaded": self._shape_pipeline is not None,
+        }
+
     def _check_license_gate(self) -> None:
         acknowledgement = os.getenv("DABSKY_HUNYUAN_LICENSE_ACK", "").strip()
         if acknowledgement != "I_HAVE_REVIEWED_LICENSE":
