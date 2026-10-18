@@ -2,13 +2,12 @@
 
 This service turns a validated reference image into a GLB asynchronously. It is
 deliberately separate from Firebase so GPU memory and model credentials never
-enter the Android app or the low-cost API layer.
+enter the Android app or the low-cost API layer. Prompt-only jobs optionally use
+a private text-to-image conditioner before entering the same shape pipeline.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import os
 import threading
@@ -18,8 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 
+from conditioning import ConditioningError, TextConditioner
 from contract import PayloadError, decode_payload
 from runtime import HunyuanRuntime, ModelLicenseError
 
@@ -27,10 +28,11 @@ RESULT_ROOT = Path(os.getenv("DABSKY_RESULT_DIR", "/tmp/dabsky-results"))
 MAX_MODEL_BYTES = 80 * 1024 * 1024
 executor = ThreadPoolExecutor(max_workers=max(1, int(os.getenv("DABSKY_WORKERS", "1"))))
 runtime = HunyuanRuntime()
+conditioner = TextConditioner()
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.Lock()
 
-app = FastAPI(title="Dabsky AI v1 GPU worker", version="1.0.0")
+app = FastAPI(title="Dabsky AI v1 GPU worker", version="1.1.0")
 
 
 def _authorized(request: Request) -> None:
@@ -115,13 +117,14 @@ async def health(request: Request) -> JSONResponse:
         {
             "status": "ok",
             "service": "dabsky-ai-worker",
-            "version": "1.0.0",
+            "version": "1.1.0",
             "model": runtime.model_path,
             "device": runtime.device,
             "ready_for_generation": os.getenv(
                 "DABSKY_HUNYUAN_LICENSE_ACK", ""
             ).strip()
             == "I_HAVE_REVIEWED_LICENSE",
+            "text_conditioning_available": conditioner.available(),
         }
     )
 
@@ -132,9 +135,14 @@ async def catalog(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "generator": "hunyuan3d-2.1",
-            "text_to_mesh_ai": False,
+            "text_to_mesh_ai": conditioner.available(),
             "image_to_mesh_ai": True,
             "reference_images": True,
+            "text_conditioning": (
+                "private_text_to_image_endpoint"
+                if conditioner.available()
+                else "not_configured"
+            ),
             "output_formats": ["glb"],
         }
     )
@@ -148,12 +156,14 @@ async def create_job(request: Request) -> JSONResponse:
     except PayloadError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if payload["reference"] is None:
-        raise HTTPException(
-            status_code=422,
-            detail="Dabsky AI v1 currently requires a reference image. "
-            "Text-to-image conditioning will be added as the next model stage.",
-        )
+    reference = payload["reference"]
+    if reference is None:
+        try:
+            reference = await run_in_threadpool(
+                conditioner.image_for_prompt, payload["prompt"]
+            )
+        except ConditioningError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     job_id = uuid.uuid4().hex
     with jobs_lock:
@@ -163,7 +173,7 @@ async def create_job(request: Request) -> JSONResponse:
             "message": "Queued for Dabsky AI generation.",
             "prompt": payload["prompt"],
         }
-    executor.submit(_run_generation, job_id, payload["prompt"], payload["reference"])
+    executor.submit(_run_generation, job_id, payload["prompt"], reference)
     return JSONResponse(_snapshot(job_id), status_code=202)
 
 
