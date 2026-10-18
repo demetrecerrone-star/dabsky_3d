@@ -1,9 +1,12 @@
 import base64
 import os
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from conditioning import TextConditioner
 from contract import MAX_PROMPT_CHARS, PayloadError, decode_payload
+from runtime import HunyuanRuntime
 
 
 class ContractTests(unittest.TestCase):
@@ -58,6 +61,30 @@ class ContractTests(unittest.TestCase):
                     },
                 }
             )
+
+
+    def test_readiness_requires_license_and_shape_package(self) -> None:
+        previous_ack = os.environ.get("DABSKY_HUNYUAN_LICENSE_ACK")
+        try:
+            with TemporaryDirectory() as temporary:
+                runtime = HunyuanRuntime()
+                runtime.repo_path = Path(temporary)
+
+                os.environ.pop("DABSKY_HUNYUAN_LICENSE_ACK", None)
+                self.assertFalse(runtime.readiness()["ready_for_generation"])
+
+                os.environ["DABSKY_HUNYUAN_LICENSE_ACK"] = "I_HAVE_REVIEWED_LICENSE"
+                self.assertFalse(runtime.readiness()["ready_for_generation"])
+
+                (Path(temporary) / "hy3dshape").mkdir()
+                diagnostics = runtime.readiness()
+                self.assertTrue(diagnostics["shape_package_available"])
+                self.assertTrue(diagnostics["ready_for_generation"])
+        finally:
+            if previous_ack is None:
+                os.environ.pop("DABSKY_HUNYUAN_LICENSE_ACK", None)
+            else:
+                os.environ["DABSKY_HUNYUAN_LICENSE_ACK"] = previous_ack
 
 
 if __name__ == "__main__":
