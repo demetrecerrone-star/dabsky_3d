@@ -13,10 +13,11 @@ The backend now has two generation modes:
 
 ## API
 
-- `GET /health`: public service status and whether the neural worker is configured.
+- `GET /health`: public service status, worker reachability, and readiness diagnostics.
 - `GET /v1/catalog`: capabilities.
 - `POST /v1/jobs`: Firebase Auth bearer token plus prompt and optional reference image.
 - `GET /v1/jobs/{id}`: owner-only status and progress.
+- `POST /v1/jobs/{id}/cancel`: owner-only cancellation request.
 - `GET /v1/jobs/{id}/model`: owner-only GLB download.
 
 Reference images are validated, forwarded to the private worker in memory, and
@@ -61,6 +62,9 @@ Then set these Firebase Function environment variables:
 
 - `DABSKY_INFERENCE_URL`: private or authenticated shape-worker URL.
 - `DABSKY_INFERENCE_TOKEN`: shape-worker bearer token.
+
+The Android app continues using the Firebase Dabsky API URL. Do not put the
+RunPod URL or worker token in the APK.
 
 Check both services before connecting the Android app:
 
