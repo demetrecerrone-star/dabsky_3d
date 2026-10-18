@@ -9,6 +9,7 @@ from typing import Any
 MAX_PROMPT_CHARS = 500
 MAX_REFERENCE_BYTES = 6 * 1024 * 1024
 SUPPORTED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
+SUPPORTED_OUTPUT_FORMATS = {"glb"}
 
 
 class PayloadError(ValueError):
@@ -37,6 +38,11 @@ def decode_payload(payload: Any) -> dict[str, Any]:
     if not prompt or len(prompt) > MAX_PROMPT_CHARS:
         raise PayloadError(f"Prompt must contain 1–{MAX_PROMPT_CHARS} characters.")
 
+    output_format = payload.get("output_format", "glb")
+    if not isinstance(output_format, str) or output_format.strip().lower() not in SUPPORTED_OUTPUT_FORMATS:
+        raise PayloadError("Only GLB output is currently supported.")
+    output_format = output_format.strip().lower()
+
     reference = payload.get("reference_image")
     decoded_reference: dict[str, Any] | None = None
     if reference is not None:
@@ -63,5 +69,5 @@ def decode_payload(payload: Any) -> dict[str, Any]:
     return {
         "prompt": prompt,
         "reference": decoded_reference,
-        "output_format": payload.get("output_format", "glb"),
+        "output_format": output_format,
     }
